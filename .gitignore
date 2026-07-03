@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Database
+rag.db
+*.db
+
+# Uploaded files
+upload_files/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test cache
+.pytest_cache/
+test/.pytest_cache/
+
+# Personal / interview notes
+interview.md
+面试准备_RAG项目.md
+problems.md
+SKILL.md
+
+# OS
+.DS_Store
+Thumbs.db

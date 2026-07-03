@@ -1,0 +1,58 @@
+elasticsearch:
+  host: "localhost"
+  port: 9200
+  scheme: "http"
+  username: ""
+  password: ""
+
+database:
+  engine: "sqlite"
+  path: "rag.db"
+  host: "localhost"
+  username: ""
+  password: ""
+
+models:
+  embedding_model:
+    bge-small-zh-v1.5:
+      hf_url: "https://huggingface.co/BAAI/bge-small-zh-v1.5"
+      local_url: "D:/AILLM/Week04/models/BAAI/bge-small-zh-v1.5/"
+      dims: 512
+
+  rerank_model:
+    bge-reranker-base:
+      hf_url: "https://huggingface.co/BAAI/bge-rerank-base"
+      local_url: "D:/AILLM/Week04/models/BAAI/bge-reranker-base/"
+
+  llm:
+    config:
+      temperature: 0.1
+      top_p: 1
+      max_token_to_sample: 1024
+    base_model:
+      glm:
+        tokens: ""
+      qwen:
+        tokens: ""
+      gpt:
+        tokens: ""
+
+
+device: "cpu"
+
+rag:
+  # llm_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"  # DashScope 示例
+  # llm_api_key: ""
+  # llm_model: "qwen-max"  # 或者 "qwen-plus"
+  llm_base: "http://localhost:11434/v1"
+  llm_api_key: "ollama"
+  llm_model: "qwen2.5:1.5b"
+  embedding_model: "bge-small-zh-v1.5"
+  rerank_model: "bge-reranker-base"
+  chunk_size: 256
+  chunk_overlap: 20
+  chunk_candidate: 10
+  use_embedding: true
+  use_rerank: true
+  use_rrf: true
+  port: 6010
