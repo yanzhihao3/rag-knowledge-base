@@ -2,6 +2,8 @@
 
 一个本地部署的 RAG 智能问答系统，支持 PDF 文档上传、自然语言提问、多轮对话。
 
+![测试结果](img.png)
+
 ## 技术栈
 
 FastAPI / Elasticsearch / SQLite / Ollama / SBert / BM25 / pdfplumber
