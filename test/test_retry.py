@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag_api import with_retry
+from utils import with_retry
 
 
 class TestRetryMechanism:

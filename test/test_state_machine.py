@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag_api import TaskStateMachine, task_state_machine
+from utils import TaskStateMachine, task_state_machine
 
 
 class TestStateMachine:
