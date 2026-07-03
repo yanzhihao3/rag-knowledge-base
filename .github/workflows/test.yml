@@ -1,0 +1,23 @@
+name: Run Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install fastapi uvicorn sqlalchemy pdfplumber elasticsearch==8.13.0 pytest httpx pydantic PyYAML
+
+      - name: Run unit tests
+        run: |
+          pytest test/test_retry.py test/test_state_machine.py test/test_pdf_processing.py test/test_permission.py -v
