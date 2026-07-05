@@ -6,6 +6,8 @@
 
 **技术栈**：FastAPI / Elasticsearch / SQLite / Ollama / SBert / BM25 / pdfplumber
 
+**前端**：Vue 3 / Element Plus / Axios / Vite
+
 **运行**：Ollama 本地运行 LLM（默认 `qwen2.5:1.5b`），服务端口 6010。
 
 ## 项目结构
@@ -20,6 +22,16 @@
 ├── config.yaml          # 配置：ES、数据库、模型路径、LLM
 ├── upload_files/        # 上传的 PDF 文件
 ├── rag.db               # SQLite 数据库
+├── frontend/            # Vue 3 前端
+│   ├── src/
+│   │   ├── App.vue          # 根组件（布局）
+│   │   ├── api.js           # Axios API 封装
+│   │   ├── components/
+│   │   │   ├── Sidebar.vue  # 侧边栏（知识库+文档管理）
+│   │   │   └── ChatView.vue # 聊天界面
+│   │   └── main.js          # 入口
+│   ├── vite.config.js
+│   └── package.json
 └── test/                # 单元测试
 ```
 
@@ -64,14 +76,16 @@ rag:
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/v1/knowledge_base` | 查询知识库（SQLite） |
+| GET | `/v1/knowledge_base/list` | 知识库列表 |
 | POST | `/v1/knowledge_base` | 创建知识库（SQLite） |
 | DELETE | `/v1/knowledge_base` | 删除知识库（SQLite） |
 | GET | `/v1/document` | 查询文档（SQLite） |
+| GET | `/v1/document/list` | 文档列表（按知识库） |
 | POST | `/v1/document` | 上传 PDF（异步解析） |
 | DELETE | `/v1/document` | 删除文档（SQLite） |
 | POST | `/v1/embedding` | 文本向量化 |
 | POST | `/v1/rerank` | 重排序 |
-| POST | `/chat` | RAG 多轮对话 |
+| POST | `/chat` | RAG 多轮对话（含 debug_info 检索详情） |
 
 ## 检索流程
 
@@ -80,6 +94,7 @@ rag:
 3. **向量化** → BGE 生成 512 维向量，写入 ES
 4. **检索时** → Query 改写（结合历史理解指代）→ BM25 + KNN **双路并行召回** → RRF 融合 → Cross-Encoder 重排
 5. **生成** → 检索结果注入 Prompt → 调用 Ollama LLM
+6. **结果可视化** → `/chat` 返回 `debug_info`（改写后 query、召回chunks、RRF/重排分数），前端折叠面板展示
 
 ## 数据存储架构
 

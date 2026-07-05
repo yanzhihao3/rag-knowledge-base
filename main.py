@@ -7,7 +7,10 @@ import datetime
 import traceback
 import uvicorn
 from typing_extensions import Annotated
+from typing import List, Dict
 from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from router_schemas import (
      EmbeddingRequest, EmbeddingResponse,
      RAGRequest, RAGResponse,
@@ -35,6 +38,15 @@ app = FastAPI(
         # favicon 地址可改可不改
         "swagger_favicon_url": "https://fastapi.tiangolo.com/img/favicon.png",
     }
+)
+
+# CORS：允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/v1/knowledge_base")
@@ -71,6 +83,38 @@ def get_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
         process_status="failed",
         process_time=time.time() - start_time,
     )
+
+@app.get("/v1/knowledge_base/list")
+def list_knowledge_base(token: str):
+    start_time = time.time()
+    try:
+        with Session() as session:
+            records = session.query(KnowledgeDatabase).all()
+            return {
+                "request_id": str(uuid.uuid4()),
+                "knowledge_list": [
+                    {
+                        "knowledge_id": r.knowledge_id,
+                        "title": r.title,
+                        "category": r.category,
+                    }
+                    for r in records
+                ],
+                "response_code": 200,
+                "response_msg": "ok",
+                "process_status": "completed",
+                "process_time": time.time() - start_time,
+            }
+    except Exception as e:
+        traceback.print_exc()
+        return {
+            "request_id": str(uuid.uuid4()),
+            "knowledge_list": [],
+            "response_code": 500,
+            "response_msg": str(e),
+            "process_status": "failed",
+            "process_time": time.time() - start_time,
+        }
 
 @app.delete("/v1/knowledge_base")
 def delete_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
@@ -194,6 +238,42 @@ def get_document(document_id: int, token: str) -> DocumentResponse:
         process_time=time.time() - start_time,
 
     )
+
+@app.get("/v1/document/list")
+def list_document(knowledge_id: int, token: str):
+    start_time = time.time()
+    try:
+        with Session() as session:
+            records = session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.knowledge_id == knowledge_id
+            ).all()
+            return {
+                "request_id": str(uuid.uuid4()),
+                "document_list": [
+                    {
+                        "document_id": d.document_id,
+                        "title": d.title,
+                        "category": d.category,
+                        "file_type": d.file_type,
+                        "create_dt": str(d.create_dt),
+                    }
+                    for d in records
+                ],
+                "response_code": 200,
+                "response_msg": "ok",
+                "process_status": "completed",
+                "process_time": time.time() - start_time,
+            }
+    except Exception as e:
+        traceback.print_exc()
+        return {
+            "request_id": str(uuid.uuid4()),
+            "document_list": [],
+            "response_code": 500,
+            "response_msg": str(e),
+            "process_status": "failed",
+            "process_time": time.time() - start_time,
+        }
 
 @app.delete("/v1/document")
 def delete_document(document_id: int, token: str) -> DocumentResponse:
@@ -345,10 +425,11 @@ async def semantic_rerank(req: RerankRequest) -> RerankResponse:
 @app.post("/chat")
 def chat(req: RAGRequest) -> RAGResponse:
     start_time = time.time()
-    message = RAG().chat_with_rag(req.knowledge_id, req.message)
+    message, debug_info = RAG().chat_with_rag(req.knowledge_id, req.message)
     return RAGResponse(
         request_id=str(uuid.uuid4()),
         message=message,
+        debug_info=debug_info,
         response_code=200,
         response_msg="ok",
         process_status="completed",

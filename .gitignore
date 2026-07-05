@@ -23,11 +23,15 @@ upload_files/
 test/.pytest_cache/
 
 # Personal / interview notes
-interview.md
-面试准备_RAG项目.md
-problems.md
-SKILL.md
+_md/interview.md
+_md/面试准备_RAG项目.md
+_md/problems.md
+_md/SKILL.md
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

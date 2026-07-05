@@ -333,15 +333,30 @@ class RAG:
         sorted_records = [search_id2record[x[0]] for x in sorted_dict][:self.chunk_candidate]
         sorted_content = [x["chunk_content"] for x in sorted_records]
 
+        # 构造 debug 信息
+        debug_chunks = []
+        for _id, score in sorted_dict[:self.chunk_candidate]:
+            record = search_id2record[_id]
+            content = (record.get("chunk_content") or [""])[0]
+            page = record.get("page_number")
+            page = page[0] if isinstance(page, list) else (page or 0)
+            doc_id = record.get("document_id")
+            doc_id = doc_id[0] if isinstance(doc_id, list) else (doc_id or 0)
+            debug_chunks.append({
+                "content": content[:200],
+                "page_number": page,
+                "document_id": doc_id,
+                "rrf_score": round(float(score), 4),
+                "rerank_score": None,
+            })
+
         if self.use_rerank:
             test_pair = []
             for chunk_content in sorted_content:
-                # text = test_pair.append([query, chunk_content])
-                # chunk_content 字段从 ES 返回时是列表格式 ["文本"]，但 rerank 传参时直接用了列表而不是字符串，导致 tokenizer 报错。
-                # 问题找到了。ES 的 fields 返回的值都是列表格式（比如 chunk_content: ["text"]），但 rerank tokenizer 期望字符串。
                 text = chunk_content[0] if isinstance(chunk_content, list) else chunk_content
                 test_pair.append([rewritten_query, text])
             if not sorted_content:
+                self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
                 return sorted_records
 
             rerank_score = self.get_rerank(test_pair)
@@ -349,6 +364,11 @@ class RAG:
 
             sorted_records = [sorted_records[i] for i in rerank_idx]
             sorted_content = [sorted_content[i] for i in rerank_idx]
+            debug_chunks = [debug_chunks[i] for i in rerank_idx]
+            for i, idx in enumerate(rerank_idx):
+                debug_chunks[i]["rerank_score"] = round(float(rerank_score[idx]), 4)
+
+        self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
         return sorted_records
 
     def chat_with_rag(self, knowledge_id: int, message:List[Dict]):
@@ -358,6 +378,7 @@ class RAG:
         if len(message) == 1:
             query = message[0]["content"]
             related_records = self.query_document(query, knowledge_id, None)
+            debug_info = getattr(self, '_last_debug_info', None)
             try:
                 print(related_records)
             except UnicodeEncodeError:
@@ -379,6 +400,7 @@ class RAG:
             print(f"[DEBUG chat_with_rag] history length: {len(history)}")
             print(f"[DEBUG chat_with_rag] history: {history}")
             related_records = self.query_document(query, knowledge_id, history)
+            debug_info = getattr(self, '_last_debug_info', None)
             related_document = '\n'.join([x["chunk_content"][0] for x in related_records])
 
             rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
@@ -394,7 +416,9 @@ class RAG:
                 0.7, 0.9
             ).content
             message.append({"role": "system", "content": normal_response})
-        return message
+
+        return message, debug_info or {}
+
 
 
 
@@ -412,38 +436,45 @@ class RAG:
 
     def query_rewrite(self, query: str, history: List[Dict] = None) -> str:
         print(f"[DEBUG] query_rewrite called with query={query}, history={history}")
-        if history and len(history) >= 2:
-            # 提取上一轮对话内容作为上下文
-            last_user_msg = history[-2].get("content", "") if len(history) >= 2 else ""
-            last_ai_msg = ""
-            for msg in reversed(history):
-                if msg.get("role") == "system":
-                    last_ai_msg = msg.get("content", "")
-                    break
 
-            prompt = f"""根据对话历史改写问题，只输出替换后的句子。
+        # 没有历史对话时，问题没有指代需要消除，直接用原问题
+        if not history or len(history) < 2:
+            print(f"[Query改写] 无历史对话，使用原问题: {query}")
+            return query
+
+        # 提取上一轮对话内容作为上下文
+        last_user_msg = history[-2].get("content", "") if len(history) >= 2 else ""
+        last_ai_msg = ""
+        for msg in reversed(history):
+            if msg.get("role") == "system":
+                last_ai_msg = msg.get("content", "")
+                break
+
+        prompt = f"""你只做问题改写，不要回答问题。
+
+把用户的问题改写成完整表达，消除指代词（它、这、那、它们等）。
+如果有省略部分，补充完整。如果问题已经完整，原样输出。
+
+只输出改写后的句子，不要任何解释。
 
 示例：
-问：它是什么？答：RAG是什么？
-问：它怎么实现的？答：RAG怎么实现的？
+问：它是什么？
+答：RAG是什么？
 
-对话：
-user: {last_user_msg}
-assistant: {last_ai_msg[:200]}...
+问：它怎么实现的？
+答：RAG怎么实现的？
 
-问：{query}
-答："""
-            print(f"[DEBUG] prompt sent to LLM:\n{prompt}")
-        else:
-            prompt = f"""请将以下问题改写成完整表达，消除指代词和省略。
-如果问题已经完整，直接返回原问题。
+对话历史：
+用户：{last_user_msg}
+助手：{last_ai_msg[:200]}
 
-问题：{query}
-答："""
+当前问题：{query}
+改写结果："""
+        print(f"[DEBUG] prompt sent to LLM:\n{prompt}")
         try:
             response = self.chat(
                 [{"role": "user", "content": prompt}],
-                0.7, 0.9
+                0.3, 0.5
             )
             rewritten = response.content.strip()
             print(f"[Query改写] 原始问题: {query}")

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Union, Any, Tuple, Dict
+from typing import List, Union, Any, Tuple, Dict, Optional
 from fastapi import File, UploadFile, Form
 from typing_extensions import Annotated
 
@@ -76,4 +76,5 @@ class RAGResponse(BaseModel):
     response_msg: str = Field(description="响应信息，详细描述响应状态或错误信息")
     process_status: str = Field(description="处理状态，例如 'completed'、'pending' 或 'failed'")
     processing_time: float = Field(description="处理请求的耗时（秒）")
+    debug_info: Optional[dict] = Field(None, description="检索中间结果（改写后query、召回chunks等）")
 

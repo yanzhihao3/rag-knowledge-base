@@ -2,14 +2,15 @@ import yaml
 from elasticsearch import Elasticsearch
 import traceback
 import os
+import time
 
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
-es_host = config["elasticsearch"]["host"]
-es_port = config["elasticsearch"]["port"]
+es_host = os.environ.get("ES_HOST", config["elasticsearch"]["host"])
+es_port = int(os.environ.get("ES_PORT", config["elasticsearch"]["port"]))
 es_scheme = config["elasticsearch"]["scheme"]
 es_username = config["elasticsearch"]["username"]
 es_password = config["elasticsearch"]["password"]
@@ -30,7 +31,13 @@ def init_es():
     检查es环境配置
     :return: 环境是否配置成功
     """
-    if not es.ping():
+    # Docker 环境下等待 ES 就绪（最多重试 30 次，每次 2 秒）
+    for i in range(30):
+        if es.ping():
+            break
+        print(f"Waiting for Elasticsearch... ({i+1}/30)")
+        time.sleep(2)
+    else:
         print("Could not connect to Elasticsearch")
         return False
 
