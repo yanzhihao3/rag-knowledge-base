@@ -298,10 +298,13 @@ class RAG:
 
     def query_document(self, query: str, knowledge_id: int, history: List[Dict] = None) -> List[str]:
         # Query改写：消除指代词，完整表达（传入历史帮助理解指代）
+        t0 = time.monotonic()
         rewritten_query = self.query_rewrite(query, history)
+        t1 = time.monotonic()
 
         # 向量化（串行在并行之前，因为向量检索依赖结果）
         embedding_vector = self.get_embedding(rewritten_query)
+        t2 = time.monotonic()
 
         # 双路并行召回
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -353,6 +356,7 @@ class RAG:
                 "rrf_score": round(float(score), 4),
                 "rerank_score": None,
             })
+        t3 = time.monotonic()
 
         if self.use_rerank:
             test_pair = []
@@ -371,6 +375,12 @@ class RAG:
             debug_chunks = [debug_chunks[i] for i in rerank_idx]
             for i, idx in enumerate(rerank_idx):
                 debug_chunks[i]["rerank_score"] = round(float(rerank_score[idx]), 4)
+
+        t4 = time.monotonic()
+        logger.info(
+            "[RAG] 改写=%.3fs 向量=%.3fs 召回=%.3fs 重排=%.3fs",
+            t1 - t0, t2 - t1, t3 - t2, t4 - t3,
+        )
 
         self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
         return sorted_records
