@@ -1,8 +1,10 @@
 import yaml
 from elasticsearch import Elasticsearch
-import traceback
 import os
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
@@ -35,10 +37,10 @@ def init_es():
     for i in range(30):
         if es.ping():
             break
-        print(f"Waiting for Elasticsearch... ({i+1}/30)")
+        logger.info("等待 Elasticsearch... (%d/30)", i + 1)
         time.sleep(2)
     else:
-        print("Could not connect to Elasticsearch")
+        logger.error("无法连接 Elasticsearch")
         return False
 
     document_meta_mapping = {
@@ -64,9 +66,8 @@ def init_es():
     try:
         if not es.indices.exists(index="document_meta"):
             es.indices.create(index="document_meta", body=document_meta_mapping)
-    except:
-        print(traceback.format_exc())
-        print("Could not create index")
+    except Exception:
+        logger.exception("创建 document_meta 索引失败")
         return False
 
     chunk_info_mapping = {
@@ -101,11 +102,10 @@ def init_es():
     try:
         if not es.indices.exists(index="chunk_info"):
             es.indices.create(index="chunk_info", body=chunk_info_mapping)
-    except:
-        print(traceback.format_exc())
-        print("Could not create index of chunk_info")
+    except Exception:
+        logger.exception("创建 chunk_info 索引失败")
         return False
-    print("Successfully connected to Elasticsearch")
+    logger.info("成功连接 Elasticsearch")
     return True
 init_es()
 
