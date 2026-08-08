@@ -2,6 +2,7 @@ import yaml
 from typing import Union, List, Any, Dict
 import numpy as np
 import datetime
+import time
 import pdfplumber
 from openai import OpenAI
 import torch
@@ -11,6 +12,9 @@ from es_api import es
 import os
 from concurrent.futures import ThreadPoolExecutor
 from utils import with_retry, TaskStateMachine, task_state_machine
+import logging
+
+logger = logging.getLogger(__name__)
 
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
@@ -60,12 +64,12 @@ def load_rerank_model(model_name: str, model_path: str) -> None:
 if config["rag"]["use_embedding"]:
     model_name = config["rag"]["embedding_model"]
     model_path = config["models"]["embedding_model"][model_name]["local_url"]
-    print(f"Loading embedding model {model_name} from model_path...")
+    logger.info("加载 embedding 模型: %s", model_name)
     load_embedding_model(model_name, model_path)
 if config["rag"]["use_rerank"]:
     model_name = config["rag"]["rerank_model"]
     model_path = config["models"]["rerank_model"][model_name]["local_url"]
-    print(f"Loading rerank model {model_name} from model_path...")
+    logger.info("加载 rerank 模型: %s", model_name)
     load_rerank_model(model_name, model_path)
 
 def split_text_with_overlap(text, chunk_size, chunk_overlap):
@@ -100,9 +104,9 @@ class RAG:
         try:
             pdf = pdfplumber.open(file_path)
         except:
-            print("打开失败！")
+            logger.warning("打开 PDF 失败: %s", file_path)
             return False
-        print(f"{file_path} pages:", len(pdf.pages))
+        logger.info("PDF %s 共 %d 页", file_path, len(pdf.pages))
 
         abstract = ""
         prev_page_tail = ""  # 跨页断句：保存上页末尾的不完整句子
@@ -210,7 +214,7 @@ class RAG:
             elif "word" in file_type:
                 pass
             task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_COMPLETED)
-            print("提取完成", document_id, file_type, file_path)
+            logger.info("文档提取完成 document_id=%s file_type=%s path=%s", document_id, file_type, file_path)
         except Exception as e:
             task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_FAILED)
             raise e
@@ -372,17 +376,13 @@ class RAG:
         return sorted_records
 
     def chat_with_rag(self, knowledge_id: int, message:List[Dict]):
-        print(f"[DEBUG chat_with_rag] message length: {len(message)}")
-        print(f"[DEBUG chat_with_rag] message: {message}")
+        logger.info("[chat] 收到 %d 条消息", len(message))
 
         if len(message) == 1:
             query = message[0]["content"]
             related_records = self.query_document(query, knowledge_id, None)
             debug_info = getattr(self, '_last_debug_info', None)
-            try:
-                print(related_records)
-            except UnicodeEncodeError:
-                print(f"[DEBUG] {len(related_records)} records retrieved")
+            logger.info("[RAG] 检索到 %d 条记录", len(related_records))
             related_document = '\n'.join([x["chunk_content"][0] for x in related_records])
 
             rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
@@ -397,8 +397,7 @@ class RAG:
             # 多轮对话：从历史消息中提取最新用户问题，做 RAG 检索
             query = message[-1]["content"]
             history = message[:-1]  # 传入历史帮助 query_rewrite 理解指代
-            print(f"[DEBUG chat_with_rag] history length: {len(history)}")
-            print(f"[DEBUG chat_with_rag] history: {history}")
+            logger.info("[chat] 历史 %d 条", len(history))
             related_records = self.query_document(query, knowledge_id, history)
             debug_info = getattr(self, '_last_debug_info', None)
             related_document = '\n'.join([x["chunk_content"][0] for x in related_records])
@@ -435,11 +434,11 @@ class RAG:
         return ""
 
     def query_rewrite(self, query: str, history: List[Dict] = None) -> str:
-        print(f"[DEBUG] query_rewrite called with query={query}, history={history}")
+        logger.debug("query_rewrite query=%s history=%d条", query, len(history) if history else 0)
 
         # 没有历史对话时，问题没有指代需要消除，直接用原问题
         if not history or len(history) < 2:
-            print(f"[Query改写] 无历史对话，使用原问题: {query}")
+            logger.debug("无历史对话，使用原问题: %s", query)
             return query
 
         # 提取上一轮对话内容作为上下文
@@ -470,18 +469,17 @@ class RAG:
 
 当前问题：{query}
 改写结果："""
-        print(f"[DEBUG] prompt sent to LLM:\n{prompt}")
+        logger.debug("发给 LLM 的 prompt 长度: %d 字符", len(prompt))
         try:
             response = self.chat(
                 [{"role": "user", "content": prompt}],
                 0.3, 0.5
             )
             rewritten = response.content.strip()
-            print(f"[Query改写] 原始问题: {query}")
-            print(f"[Query改写] 改写后: {rewritten}")
+            logger.info("[Query改写] 原始=%s -> 改写=%s", query, rewritten)
             return rewritten if rewritten else query
         except Exception as e:
-            print(f"Query改写失败，使用原问题: {e}")
+            logger.warning("Query改写失败，使用原问题: %s", e)
             return query
 
 
