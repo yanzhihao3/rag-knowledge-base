@@ -1,6 +1,9 @@
 import time
 from typing import Dict
 from functools import wraps
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def with_retry(max_retries=3, base_delay=1):
@@ -20,10 +23,10 @@ def with_retry(max_retries=3, base_delay=1):
                     last_exception = e
                     if retry_count < max_retries - 1:
                         delay = base_delay * (2 ** retry_count)
-                        print(f"[重试] {func.__name__} 第{retry_count + 1}次失败，{delay}s后重试: {e}")
+                        logger.warning("[重试] %s 第%d次失败，%.1fs后重试: %s", func.__name__, retry_count + 1, delay, e)
                         time.sleep(delay)
                     else:
-                        print(f"[重试耗尽] {func.__name__} 失败: {e}")
+                        logger.error("[重试耗尽] %s 失败: %s", func.__name__, e)
             raise last_exception
         return wrapper
     return decorator
@@ -47,7 +50,7 @@ class TaskStateMachine:
     def set_state(self, document_id: str, state: str) -> None:
         """设置任务状态"""
         self.states[document_id] = state
-        print(f"[状态机] doc_{document_id}: {state}")
+        logger.info("[状态机] doc=%s: %s", document_id, state)
 
     def get_state(self, document_id: str) -> str:
         """获取任务状态，默认是pending"""
