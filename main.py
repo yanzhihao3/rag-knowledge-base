@@ -4,11 +4,11 @@ import time
 import numpy as np
 import uuid
 import datetime
-import traceback
+import logging
 import uvicorn
 from typing_extensions import Annotated
 from typing import List, Dict
-from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from router_schemas import (
@@ -18,11 +18,17 @@ from router_schemas import (
      KnowledgeRequest, KnowledgeResponse,
      DocumentRequest, DocumentResponse,
 )
+from logging_config import setup_logging, request_id_var
+
+setup_logging()
+
 from rag_api import RAG
 from db_api import (
      KnowledgeDocument, KnowledgeDatabase,
      Session
 )
+
+logger = logging.getLogger(__name__)
 
 #project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #config_path = os.path.join(project_root, 'config.yaml')
@@ -39,6 +45,26 @@ app = FastAPI(
         "swagger_favicon_url": "https://fastapi.tiangolo.com/img/favicon.png",
     }
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    token = request_id_var.set(request_id)
+    start = time.monotonic()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    except Exception:
+        logger.exception("请求处理异常: %s %s", request.method, request.url.path)
+        raise
+    finally:
+        duration = time.monotonic() - start
+        logger.info("%s %s -> %d | %.3fs", request.method, request.url.path, status, duration)
+        request_id_var.reset(token)
+
 
 # CORS：允许前端跨域访问
 app.add_middleware(
@@ -70,7 +96,7 @@ def get_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
                         process_time=time.time() - start_time,
                     )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("查询知识库失败: knowledge_id=%d", knowledge_id)
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
         knowledge_id=knowledge_id,
@@ -106,7 +132,7 @@ def list_knowledge_base(token: str):
                 "process_time": time.time() - start_time,
             }
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("查询知识库列表失败")
         return {
             "request_id": str(uuid.uuid4()),
             "knowledge_list": [],
@@ -140,7 +166,7 @@ def delete_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
                     process_time=time.time() - start_time,
                 )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("删除知识库失败: knowledge_id=%d", knowledge_id)
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
         knowledge_id=knowledge_id,
@@ -185,7 +211,7 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
                 process_time=time.time() - start_time,
             )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("新增知识库失败: title=%s", req.title)
         pass
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
@@ -223,7 +249,7 @@ def get_document(document_id: int, token: str) -> DocumentResponse:
                     )
                 break
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("查询文档失败: document_id=%d", document_id)
         pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
@@ -265,7 +291,7 @@ def list_document(knowledge_id: int, token: str):
                 "process_time": time.time() - start_time,
             }
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("查询文档列表失败: knowledge_id=%d", knowledge_id)
         return {
             "request_id": str(uuid.uuid4()),
             "document_list": [],
@@ -299,7 +325,7 @@ def delete_document(document_id: int, token: str) -> DocumentResponse:
                     process_time=time.time() - start_time,
                 )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("删除文档失败: document_id=%d", document_id)
         pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
@@ -375,7 +401,7 @@ def add_document(
 
             )
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("新增文档失败: title=%s", title)
         pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
