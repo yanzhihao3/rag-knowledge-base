@@ -20,4 +20,4 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest test/test_retry.py test/test_state_machine.py test/test_permission.py -v
+          pytest test/test_retry.py test/test_state_machine.py test/test_permission.py test/test_logging.py -v

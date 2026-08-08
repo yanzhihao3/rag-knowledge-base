@@ -9,6 +9,10 @@ build/
 rag.db
 *.db
 
+# Logs
+rag.log
+rag.log.*
+
 # Uploaded files
 upload_files/
 
