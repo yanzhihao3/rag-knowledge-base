@@ -108,97 +108,100 @@ class RAG:
             return False
         logger.info("PDF %s 共 %d 页", file_path, len(pdf.pages))
 
-        abstract = ""
-        prev_page_tail = ""  # 跨页断句：保存上页末尾的不完整句子
+        try:
+            abstract = ""
+            prev_page_tail = ""  # 跨页断句：保存上页末尾的不完整句子
 
-        for page_number in range(len(pdf.pages)):
-            page = pdf.pages[page_number]
+            for page_number in range(len(pdf.pages)):
+                page = pdf.pages[page_number]
 
-            # === 1. 提取表格 ===
-            tables = page.extract_tables()
-            table_content = ""
-            if tables:
-                for table_idx, table in enumerate(tables):
-                    if table and any(table):
-                        # 将表格转换为字符串格式存储
-                        table_rows = []
-                        for row in table:
-                            if row:
-                                cleaned_row = [str(cell) if cell else "" for cell in row]
-                                table_rows.append(" | ".join(cleaned_row))
-                        if table_rows:
-                            table_content += "\n[表格]\n" + "\n".join(table_rows) + "\n[/表格]\n"
+                # === 1. 提取表格 ===
+                tables = page.extract_tables()
+                table_content = ""
+                if tables:
+                    for table_idx, table in enumerate(tables):
+                        if table and any(table):
+                            # 将表格转换为字符串格式存储
+                            table_rows = []
+                            for row in table:
+                                if row:
+                                    cleaned_row = [str(cell) if cell else "" for cell in row]
+                                    table_rows.append(" | ".join(cleaned_row))
+                            if table_rows:
+                                table_content += "\n[表格]\n" + "\n".join(table_rows) + "\n[/表格]\n"
 
-            # === 2. 提取文本 ===
-            current_page_text = page.extract_text()
-            if page_number <= 3:
-                abstract = abstract + '\n' + current_page_text
+                # === 2. 提取文本 ===
+                current_page_text = page.extract_text()
+                if page_number <= 3:
+                    abstract = abstract + '\n' + current_page_text
 
-            # === 3. 跨页断句处理 ===
-            if prev_page_tail:
-                # 把上页末尾的不完整句子拼到这页开头
-                current_page_text = prev_page_tail + current_page_text
-                prev_page_tail = ""
+                # === 3. 跨页断句处理 ===
+                if prev_page_tail:
+                    # 把上页末尾的不完整句子拼到这页开头
+                    current_page_text = prev_page_tail + current_page_text
+                    prev_page_tail = ""
 
-            # 检测本页末尾是否是不完整句子
-            stripped = current_page_text.strip()
-            if stripped and stripped[-1] not in ('。', '！', '？', '.', '!', '?'):
-                # 句子被切断，找到最后一个完整句子之前的位置
-                last_punct = max(
-                    stripped.rfind('。') if stripped.rfind('。') > 0 else -1,
-                    stripped.rfind('！') if stripped.rfind('！') > 0 else -1,
-                    stripped.rfind('？') if stripped.rfind('？') > 0 else -1,
-                )
-                if last_punct > 0:
-                    prev_page_tail = stripped[last_punct + 1:]
-                    current_page_text = stripped[:last_punct + 1]
+                # 检测本页末尾是否是不完整句子
+                stripped = current_page_text.strip()
+                if stripped and stripped[-1] not in ('。', '！', '？', '.', '!', '?'):
+                    # 句子被切断，找到最后一个完整句子之前的位置
+                    last_punct = max(
+                        stripped.rfind('。') if stripped.rfind('。') > 0 else -1,
+                        stripped.rfind('！') if stripped.rfind('！') > 0 else -1,
+                        stripped.rfind('？') if stripped.rfind('？') > 0 else -1,
+                    )
+                    if last_punct > 0:
+                        prev_page_tail = stripped[last_punct + 1:]
+                        current_page_text = stripped[:last_punct + 1]
 
-            # 整页向量（包含表格内容）
-            page_text_with_table = current_page_text + table_content
-            embedding_vector = self.get_embedding(page_text_with_table)
-            page_data = {
-                "document_id": document_id,
-                "knowledge_id": knowledge_id,
-                "owner_id": 0,
-                "department_id": 0,
-                "page_number": page_number,
-                "chunk_id": 0,
-                "chunk_content": current_page_text,
-                "chunk_images": [],
-                "chunk_tables": [table_content] if table_content else [],
-                "embedding_vector": [float(x) for x in list(embedding_vector)]
-            }
-            response = es.index(index="chunk_info", document=page_data)
-
-            # 分块向量
-            page_chunks = split_text_with_overlap(current_page_text, self.chunk_size, self.chunk_overlap)
-            embedding_vector = self.get_embedding(page_chunks)  # 批量生成向量
-            for chunk_idx in range(1, len(page_chunks)+1):
+                # 整页向量（包含表格内容）
+                page_text_with_table = current_page_text + table_content
+                embedding_vector = self.get_embedding(page_text_with_table)
                 page_data = {
                     "document_id": document_id,
                     "knowledge_id": knowledge_id,
                     "owner_id": 0,
                     "department_id": 0,
                     "page_number": page_number,
-                    "chunk_id": chunk_idx,
-                    "chunk_content": page_chunks[chunk_idx - 1],
+                    "chunk_id": 0,
+                    "chunk_content": current_page_text,
                     "chunk_images": [],
-                    "chunk_tables": [],
-                    "embedding_vector": [float(x) for x in list(embedding_vector[chunk_idx - 1])]
-
+                    "chunk_tables": [table_content] if table_content else [],
+                    "embedding_vector": [float(x) for x in list(embedding_vector)]
                 }
                 response = es.index(index="chunk_info", document=page_data)
 
-        document_data = {
-            "document_id": document_id,
-            "knowledge_id": knowledge_id,
-            "owner_id": 0,
-            "department_id": 0,
-            "document_name": title,
-            "file_path": file_path,
-            "abstract": abstract,
-        }
-        response = es.index(index="document_meta", document=document_data)
+                # 分块向量
+                page_chunks = split_text_with_overlap(current_page_text, self.chunk_size, self.chunk_overlap)
+                embedding_vector = self.get_embedding(page_chunks)  # 批量生成向量
+                for chunk_idx in range(1, len(page_chunks)+1):
+                    page_data = {
+                        "document_id": document_id,
+                        "knowledge_id": knowledge_id,
+                        "owner_id": 0,
+                        "department_id": 0,
+                        "page_number": page_number,
+                        "chunk_id": chunk_idx,
+                        "chunk_content": page_chunks[chunk_idx - 1],
+                        "chunk_images": [],
+                        "chunk_tables": [],
+                        "embedding_vector": [float(x) for x in list(embedding_vector[chunk_idx - 1])]
+
+                    }
+                    response = es.index(index="chunk_info", document=page_data)
+
+            document_data = {
+                "document_id": document_id,
+                "knowledge_id": knowledge_id,
+                "owner_id": 0,
+                "department_id": 0,
+                "document_name": title,
+                "file_path": file_path,
+                "abstract": abstract,
+            }
+            response = es.index(index="document_meta", document=document_data)
+        finally:
+            pdf.close()
 
     def _extract_word_content(self):
         pass
