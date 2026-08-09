@@ -1,9 +1,22 @@
 import time
 from typing import Dict
 from functools import wraps
+import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def safe_remove_file(file_path: str) -> None:
+    """删除物理文件。文件是低危孤儿，失败只告警不阻断。"""
+    if not file_path:
+        return
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info("已删除物理文件: %s", file_path)
+    except Exception:
+        logger.warning("物理文件删除失败，需手动清理: %s", file_path)
 
 
 def with_retry(max_retries=3, base_delay=1):
