@@ -17,7 +17,8 @@
 ├── main.py              # FastAPI 入口，REST API 端点
 ├── rag_api.py           # RAG 核心逻辑：检索、召回、重排、多轮对话
 ├── db_api.py            # SQLite 操作：知识库、文档元数据
-├── es_api.py            # Elasticsearch 操作：向量索引、全文检索
+├── es_api.py            # Elasticsearch 操作：向量索引、全文检索、级联删除
+├── logging_config.py    # 日志底座：统一格式 + request_id 注入 + 轮转文件
 ├── router_schemas.py    # API 请求/响应数据结构
 ├── config.yaml          # 配置文件
 ├── upload_files/        # 上传的 PDF 文件
@@ -118,6 +119,25 @@ npm run dev
 
 PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 
+### 7. 数据一致性（级联删除）
+
+系统数据横跨 SQLite（元数据）、Elasticsearch（分块向量 + 摘要）、磁盘（PDF）三处，没有事务边界。删除采用**级联清理**，顺序钉死为「**ES 先删（失败阻断）→ 物理文件次删（失败只告警）→ SQLite 最后删（同一事务）**」：
+
+- **删文档**按 `document_id` 精确删，只清该文档的 ES 分块/摘要、PDF 和元数据行
+- **删知识库**按 `knowledge_id` 一把清，连子文档行和所有 PDF 一起清理，不误删其他库
+- ES 删除失败整体失败（返回 500、SQLite 不删），**绝不留半删状态**（删完还能搜到"幽灵分块"）
+- `delete_by_query` 显式检查 `version_conflicts`/`failures`，部分删除失败也会报错
+
+### 8. 结构化日志与监控
+
+基于 Python 标准库 `logging`，所有服务端日志统一格式，可筛、可查、可串起一次请求：
+
+- **request_id 关联**：HTTP 中间件为每个请求生成唯一 ID，经 `contextvars` 贯穿整条调用链，业务日志自动携带
+- **请求耗时**：中间件记录 `方法 路径 -> 状态码 | 耗时`
+- **检索链路耗时拆分**：改写 / 向量 / 召回 / 重排四段独立计时，一眼定位"回答慢在哪一步"
+- **脱敏**：对话全文、prompt 全文不落日志，只记长度，避免敏感内容泄露
+- **日志轮转**：`rag.log` 5MB 轮转、保留 3 份，防止无限膨胀
+
 ## API 端点
 
 | 方法 | 路径 | 说明 |
@@ -125,11 +145,11 @@ PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 | GET | `/v1/knowledge_base` | 查询知识库 |
 | GET | `/v1/knowledge_base/list` | 知识库列表 |
 | POST | `/v1/knowledge_base` | 创建知识库 |
-| DELETE | `/v1/knowledge_base` | 删除知识库 |
+| DELETE | `/v1/knowledge_base` | 删除知识库（级联清空库下 ES 分块/摘要 + PDF + 子文档） |
 | GET | `/v1/document` | 查询文档 |
 | GET | `/v1/document/list` | 文档列表（按知识库） |
 | POST | `/v1/document` | 上传 PDF（异步解析） |
-| DELETE | `/v1/document` | 删除文档 |
+| DELETE | `/v1/document` | 删除文档（级联清理 ES 分块/摘要 + PDF） |
 | POST | `/v1/embedding` | 文本向量化 |
 | POST | `/v1/rerank` | 重排序 |
 | POST | `/chat` | RAG 多轮对话（含 debug_info 检索详情） |
@@ -172,3 +192,5 @@ pytest test/ -v
 6. **跨页断句处理**：保留页面边界语义完整性
 7. **表格提取**：识别并存储 PDF 中的表格结构
 8. **任务状态机**：跟踪文档解析进度，指数退避重试保障可靠性
+9. **数据一致性级联删除**：三存储（SQLite / ES / 磁盘）无事务边界下，删除按「ES 先删（失败阻断）→ 文件次删（告警）→ SQLite 最后删（同事务）」清干净，杜绝幽灵分块与孤儿数据
+10. **结构化日志与监控**：request_id 串联整条请求链路，检索四段耗时拆分，敏感内容脱敏，5MB 轮转防膨胀
