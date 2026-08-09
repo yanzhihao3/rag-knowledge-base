@@ -27,6 +27,8 @@ from db_api import (
      KnowledgeDocument, KnowledgeDatabase,
      Session
 )
+from es_api import delete_document_chunks, delete_knowledge_chunks
+from utils import safe_remove_file
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,8 @@ app = FastAPI(
         "swagger_favicon_url": "https://fastapi.tiangolo.com/img/favicon.png",
     }
 )
-
+# 配置层让日志系统统一就位,拦截层给每个请求发身份证并记录总耗时与成败,业务层在 8 个端点出错时记录带堆栈的具体失败。三者配合:一次请求进来 → 有 id
+# 贯穿、有总耗时、出错了有明细堆栈。
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -54,7 +57,7 @@ async def log_requests(request: Request, call_next):
     start = time.monotonic()
     status = 500
     try:
-        response = await call_next(request)
+        response = await call_next(request)  #  一句话总结:call_next(request) = "把这个请求放行给真正的业务处理,我等它办完,再接着记录"。
         status = response.status_code
         return response
     except Exception:
@@ -146,36 +149,55 @@ def list_knowledge_base(token: str):
 def delete_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
     start_time = time.time()
     try:
-        for retry_time in range(10):
-            with Session() as session:
-                record = session.query(KnowledgeDatabase).filter(KnowledgeDatabase.knowledge_id == knowledge_id).first()
-                if record is None:
-                    break
-                session.delete(record)
-                session.commit()
+        with Session() as session:
+            record = session.query(KnowledgeDatabase).filter(
+                KnowledgeDatabase.knowledge_id == knowledge_id
+            ).first()
+            if record is None:
                 return KnowledgeResponse(
                     request_id=str(uuid.uuid4()),
-                    knowledge_id=knowledge_id,
-                    title=str(record.title),
-                    category=str(record.category),
-                    owner_id=record.owner_id,
-                    department_id=record.department_id,
-                    response_code=200,
-                    response_msg="知识库删除成功",
-                    process_status="completed",
+                    knowledge_id=knowledge_id, title="", category="",
+                    owner_id=0, department_id=0,
+                    response_code=404, response_msg="知识库不存在",
+                    process_status="failed",
                     process_time=time.time() - start_time,
                 )
+            # 响应字段先快照（commit 后实例过期，读取会抛 ObjectDeletedError）快照的作用：在删除记录之前，先把需要返回的字段保存到变量 即使后续记录被删除，这些变量仍然有效
+            title, category, owner_id, department_id = (
+                record.title, record.category,
+                record.owner_id, record.department_id,
+            )
+            # 该库下所有文档（文件路径 + 子记录都要用）
+            documents = session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.knowledge_id == knowledge_id
+            ).all()
+            # 1) ES：按 knowledge_id 一把清（失败抛异常 → 阻断，绝不留幽灵分块）
+            delete_knowledge_chunks(knowledge_id)
+            # 2) 物理文件：失败只告警
+            for doc in documents:
+                safe_remove_file(doc.file_path)
+            # 3) SQLite：先删子文档、再删知识库，同一事务提交
+            # 核心理解：doc 不只是一个普通对象，它是带着"数据库上下文"的对象，知道自己从哪里来，也知道如何删除自己。
+            for doc in documents:
+                session.delete(doc)
+            session.delete(record)
+            session.commit()
+            return KnowledgeResponse(
+                request_id=str(uuid.uuid4()),
+                knowledge_id=knowledge_id,
+                title=str(title), category=str(category),
+                owner_id=owner_id, department_id=department_id,
+                response_code=200, response_msg="知识库删除成功",
+                process_status="completed",
+                process_time=time.time() - start_time,
+            )
     except Exception as e:
         logger.exception("删除知识库失败: knowledge_id=%d", knowledge_id)
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
-        knowledge_id=knowledge_id,
-        title= "",
-        category="",
-        owner_id=0,
-        department_id=0,
-        response_code=404,
-        response_msg="知识库不存在",
+        knowledge_id=knowledge_id, title="", category="",
+        owner_id=0, department_id=0,
+        response_code=500, response_msg=str(e),
         process_status="failed",
         process_time=time.time() - start_time,
     )
@@ -305,40 +327,47 @@ def list_document(knowledge_id: int, token: str):
 def delete_document(document_id: int, token: str) -> DocumentResponse:
     start_time = time.time()
     try:
-        for retry_time in range(10):
-            with Session() as session:
-                record = session.query(KnowledgeDocument).filter(KnowledgeDocument.document_id == document_id).first()
-                if record is None:
-                    break
-                session.delete(record)
-                session.commit()
+        with Session() as session:
+            record = session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.document_id == document_id
+            ).first()
+            if record is None:
                 return DocumentResponse(
                     request_id=str(uuid.uuid4()),
-                    document_id=document_id,
-                    knowledge_id=record.knowledge_id,
-                    title=record.title,
-                    category=record.category,
-                    file_type=record.file_type,
-                    response_code=200,
-                    response_msg="文档删除成功！",
-                    process_status="completed",
+                    document_id=document_id, title="", category="",
+                    knowledge_id=0, file_type="",
+                    response_code=404, response_msg="文档不存在",
+                    process_status="failed",
                     process_time=time.time() - start_time,
                 )
+            file_path, knowledge_id, title, category, file_type = (
+                record.file_path, record.knowledge_id,
+                record.title, record.category, record.file_type,
+            )
+            # 1) ES：按 document_id 删分块+摘要（失败抛异常 → 阻断）
+            delete_document_chunks(document_id)
+            # 2) 物理文件：失败只告警
+            safe_remove_file(file_path)
+            # 3) SQLite：删元数据行
+            session.delete(record)
+            session.commit()
+            return DocumentResponse(
+                request_id=str(uuid.uuid4()),
+                document_id=document_id, knowledge_id=knowledge_id,
+                title=title, category=category, file_type=file_type,
+                response_code=200, response_msg="文档删除成功！",
+                process_status="completed",
+                process_time=time.time() - start_time,
+            )
     except Exception as e:
         logger.exception("删除文档失败: document_id=%d", document_id)
-        pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
-        document_id=document_id,
-        title="",
-        category="",
-        knowledge_id=0,
-        file_type="",
-        response_code=404,
-        response_msg="文档不存在",
+        document_id=document_id, title="", category="",
+        knowledge_id=0, file_type="",
+        response_code=500, response_msg=str(e),
         process_status="failed",
         process_time=time.time() - start_time,
-
     )
 
 @app.post("/v1/document")
