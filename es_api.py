@@ -4,6 +4,8 @@ import os
 import time
 import logging
 
+from utils import with_retry
+
 logger = logging.getLogger(__name__)
 
 #project_root = os.path.dirname(os.path.abspath(__file__))
@@ -108,6 +110,56 @@ def init_es():
     logger.info("成功连接 Elasticsearch")
     return True
 init_es()
+
+# resp: ES的delete_by_query操作返回的响应字典
+# "version_conflicts": 3,  // 版本冲突的文档数   "failures":  // 失败详情
+def _assert_no_delete_failures(index_name: str, resp: dict) -> None:
+    """delete_by_query 部分失败（版本冲突/失败项）时抛异常，避免静默残留幽灵分块。"""
+    if resp.get("version_conflicts") or resp.get("failures"):
+        raise RuntimeError(
+            f"{index_name} 删除部分失败: version_conflicts={resp.get('version_conflicts')}, "
+            f"failures={resp.get('failures')}"
+        )
+
+
+@with_retry(max_retries=3, base_delay=1)
+def delete_document_chunks(document_id: int) -> int:
+    """删除一个文档在 ES 的全部数据（分块 + 摘要）。失败抛异常，调用方阻断。"""
+    resp1 = es.delete_by_query(
+        index="chunk_info",
+        query={"term": {"document_id": document_id}},
+        refresh=True,
+    )
+    _assert_no_delete_failures("chunk_info", resp1)
+    resp2 = es.delete_by_query(
+        index="document_meta",
+        query={"term": {"document_id": document_id}},
+        refresh=True,
+    )
+    _assert_no_delete_failures("document_meta", resp2) # 检查是否完全删除
+    deleted = int(resp1["deleted"]) + int(resp2["deleted"])
+    logger.info("已从 ES 删除 document_id=%d 共 %d 条", document_id, deleted)
+    return deleted
+
+
+@with_retry(max_retries=3, base_delay=1)
+def delete_knowledge_chunks(knowledge_id: int) -> int:
+    """删除一个知识库在 ES 的全部数据（按 knowledge_id 一把清）。失败抛异常。"""
+    resp1 = es.delete_by_query(
+        index="chunk_info",
+        query={"term": {"knowledge_id": knowledge_id}},
+        refresh=True,
+    )
+    _assert_no_delete_failures("chunk_info", resp1)
+    resp2 = es.delete_by_query(
+        index="document_meta",
+        query={"term": {"knowledge_id": knowledge_id}},
+        refresh=True,
+    )
+    _assert_no_delete_failures("document_meta", resp2)
+    deleted = int(resp1["deleted"]) + int(resp2["deleted"])
+    logger.info("已从 ES 删除 knowledge_id=%d 共 %d 条", knowledge_id, deleted)
+    return deleted
 
 
 # 重新启动
