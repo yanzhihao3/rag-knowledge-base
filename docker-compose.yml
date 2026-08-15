@@ -1,6 +1,9 @@
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    build:
+      context: .
+      dockerfile: Dockerfile.es
+    image: rag-es:8.17.0
     container_name: rag-es
     environment:
       - discovery.type=single-node
@@ -24,10 +27,10 @@ services:
       - "6010:6010"
     environment:
       - ES_HOST=elasticsearch
+      - RAG_API_KEY=rag-dev-key
     volumes:
-      # 模型文件（根据本机路径调整）
-      - D:/AILLM/Week04/models:D:/AILLM/Week04/models
-      # 上传文件和 SQLite 数据库持久化
+      - D:/AILLM/Week04/models:/models                      # 模型挂载
+      - ./config.docker.yaml:/app/config.yaml              # 覆盖容器内配置
       - ./upload_files:/app/upload_files
       - ./rag.db:/app/rag.db
     depends_on:
