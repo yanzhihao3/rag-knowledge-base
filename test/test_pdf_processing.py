@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag_api import split_text_with_overlap
+from rag_api import split_text_with_overlap, _format_related_document, split_incomplete_sentence
 
 
 class TestPDFProcessing:
@@ -66,6 +66,73 @@ class TestPDFProcessing:
         assert "姓名 | 年龄 | 城市" in table_content
         assert "张三 | 25 | 北京" in table_content
         assert "李四 | 30 | 上海" in table_content
+
+
+class TestRelatedDocument:
+    """检索结果拼接喂给 LLM 的资料（表格必须拼进去）"""
+
+    def test_content_only_when_no_tables(self):
+        """没有表格时只拼文本"""
+        records = [
+            {"chunk_content": ["这是页面文本。"], "chunk_tables": []},
+        ]
+        assert _format_related_document(records) == "这是页面文本。"
+
+    def test_table_appended_after_content(self):
+        """有表格时表格拼在文本后面，喂给 LLM"""
+        records = [
+            {
+                "chunk_content": ["页面文本。"],
+                "chunk_tables": ["[表格]\n姓名 | 年龄 | 城市\n张三 | 25 | 北京\n[/表格]"],
+            },
+        ]
+        result = _format_related_document(records)
+        assert "页面文本。" in result
+        assert "张三 | 25 | 北京" in result
+
+    def test_multiple_records_tables_in_order(self):
+        """多条记录、多个表格都拼进去，顺序为 文本->表格->文本->表格"""
+        records = [
+            {"chunk_content": ["文本A"], "chunk_tables": ["表1"]},
+            {"chunk_content": ["文本B"], "chunk_tables": ["表2", "表3"]},
+        ]
+        result = _format_related_document(records)
+        assert result.index("文本A") < result.index("表1") < result.index("文本B") < result.index("表2") < result.index("表3")
+
+
+class TestCrossPageSentence:
+    """跨页断句中英文标点处理"""
+
+    def test_chinese_complete_sentence(self):
+        """末尾是中文句号 → 完整，无尾部"""
+        assert split_incomplete_sentence("这是完整的句子。") == ("这是完整的句子。", "")
+
+    def test_chinese_split_at_last_punctuation(self):
+        """中文句子被切断 → 从最后一个句号处切开"""
+        complete, tail = split_incomplete_sentence("前句完整。后句被切断没有句号")
+        assert complete == "前句完整。"
+        assert tail == "后句被切断没有句号"
+
+    def test_english_split_at_last_period(self):
+        """英文句子被切断 → 从最后一个英文句号处切开（原代码只查中文标点会漏）"""
+        complete, tail = split_incomplete_sentence("First sentence. Second sentence cut off")
+        assert complete == "First sentence."
+        assert tail == " Second sentence cut off"
+
+    def test_mixed_chinese_english(self):
+        """中英混合 → 从最后一个句子结束标点切开"""
+        complete, tail = split_incomplete_sentence("中文句。English here. more cut")
+        assert complete == "中文句。English here."
+        assert tail == " more cut"
+
+    def test_empty_text(self):
+        """空文本 → 完整，无尾部"""
+        assert split_incomplete_sentence("") == ("", "")
+        assert split_incomplete_sentence("   ") == ("", "")
+
+    def test_no_punctuation_returns_unchanged(self):
+        """没有任何句子结束标点 → 原样返回，无尾部"""
+        assert split_incomplete_sentence("没有句号的文本") == ("没有句号的文本", "")
 
 
 if __name__ == "__main__":

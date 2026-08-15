@@ -1,4 +1,5 @@
 import yaml
+import re
 from typing import Union, List, Any, Dict
 import numpy as np
 import datetime
@@ -82,6 +83,40 @@ def split_text_with_overlap(text, chunk_size, chunk_overlap):
         start = start + chunk_size - chunk_overlap
     return chunks
 
+
+def _format_related_document(records) -> str:
+    """把检索结果拼成喂给 LLM 的资料。
+
+    只拼 chunk_content 会让表格只参与召回、不参与生成；这里把 chunk_tables 一并拼入，
+    保证表格问题能拿到表格原文。
+    """
+    parts = []
+    for x in records:
+        content = (x.get("chunk_content") or [""])[0]
+        parts.append(content)
+        for table in (x.get("chunk_tables") or []):
+            parts.append(table)
+    return "\n".join(parts)
+
+
+_SENTENCE_END_PUNCT = set('。！？.!?')
+_SENTENCE_END_RE = re.compile('[。！？.!?]')
+
+
+def split_incomplete_sentence(text):
+    """检测文本末尾句子是否被切断，返回 (完整部分, 尾部不完整部分)。
+
+    原实现切开时只查中文标点，英文句号被忽略；这里统一按中英文结束标点切。
+    """
+    stripped = (text or "").strip()
+    if not stripped or stripped[-1] in _SENTENCE_END_PUNCT:
+        return stripped, ""
+    matches = [m for m in _SENTENCE_END_RE.finditer(stripped) if m.start() > 0]
+    if not matches:
+        return stripped, ""
+    last = matches[-1]
+    return stripped[:last.end()], stripped[last.end():]
+
 class RAG:
     def __init__(self):
         self.embedding_model = config["rag"]["embedding_model"]
@@ -141,18 +176,10 @@ class RAG:
                     current_page_text = prev_page_tail + current_page_text
                     prev_page_tail = ""
 
-                # 检测本页末尾是否是不完整句子
-                stripped = current_page_text.strip()
-                if stripped and stripped[-1] not in ('。', '！', '？', '.', '!', '?'):
-                    # 句子被切断，找到最后一个完整句子之前的位置
-                    last_punct = max(
-                        stripped.rfind('。') if stripped.rfind('。') > 0 else -1,
-                        stripped.rfind('！') if stripped.rfind('！') > 0 else -1,
-                        stripped.rfind('？') if stripped.rfind('？') > 0 else -1,
-                    )
-                    if last_punct > 0:
-                        prev_page_tail = stripped[last_punct + 1:]
-                        current_page_text = stripped[:last_punct + 1]
+                # 检测本页末尾是否是不完整句子（中英文标点统一处理）
+                current_page_text, tail = split_incomplete_sentence(current_page_text)
+                if tail:
+                    prev_page_tail = tail
 
                 # 整页向量（包含表格内容）
                 page_text_with_table = current_page_text + table_content
@@ -277,7 +304,7 @@ class RAG:
                              },
                              "size": 50
                          },
-                         fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content"],
+                         fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content", "chunk_tables"],
                          source=False)
 
     def _vector_search(self, embedding_vector, knowledge_id):
@@ -296,7 +323,7 @@ class RAG:
             }
         }
         return es.search(index="chunk_info", knn=knn_query,
-                         fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content"],
+                         fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content", "chunk_tables"],
                          source=False)
 
     def query_document(self, query: str, knowledge_id: int, history: List[Dict] = None) -> List[str]:
@@ -396,7 +423,7 @@ class RAG:
             related_records = self.query_document(query, knowledge_id, None)
             debug_info = getattr(self, '_last_debug_info', None)
             logger.info("[RAG] 检索到 %d 条记录", len(related_records))
-            related_document = '\n'.join([x["chunk_content"][0] for x in related_records])
+            related_document = _format_related_document(related_records)
 
             rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
                           .replace("{#QUESTION#}", query) \
@@ -413,7 +440,7 @@ class RAG:
             logger.info("[chat] 历史 %d 条", len(history))
             related_records = self.query_document(query, knowledge_id, history)
             debug_info = getattr(self, '_last_debug_info', None)
-            related_document = '\n'.join([x["chunk_content"][0] for x in related_records])
+            related_document = _format_related_document(related_records)
 
             rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
                           .replace("{#QUESTION#}", query) \
