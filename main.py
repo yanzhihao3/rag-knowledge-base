@@ -8,7 +8,7 @@ import logging
 import uvicorn
 from typing_extensions import Annotated
 from typing import List, Dict
-from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request
+from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from router_schemas import (
@@ -19,6 +19,9 @@ from router_schemas import (
      DocumentRequest, DocumentResponse,
 )
 from logging_config import setup_logging, request_id_var
+from fastapi.responses import JSONResponse
+from auth import is_public_path, resolve_api_key
+from fastapi.security import APIKeyHeader
 
 setup_logging()
 
@@ -38,7 +41,22 @@ logger = logging.getLogger(__name__)
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
+API_KEY = resolve_api_key(config)
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def verify_api_key(request: Request, provided: str = Security(api_key_header)):
+    if is_public_path(request.url.path):
+        return
+    if provided is None:
+        raise HTTPException(status_code=401, detail="missing API key")
+    if provided != API_KEY:
+        raise HTTPException(status_code=403, detail="invalid API key")
+
+
 app = FastAPI(
+    dependencies=[Depends(verify_api_key)],
     swagger_ui_parameters={
         # 替换成国内较快的 unpkg 镜像源
         "swagger_js_url": "https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
@@ -47,8 +65,28 @@ app = FastAPI(
         "swagger_favicon_url": "https://fastapi.tiangolo.com/img/favicon.png",
     }
 )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    # 统一错误信封：request_id / response_code / response_msg / process_status
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "request_id": str(uuid.uuid4()),
+            "response_code": exc.status_code,
+            "response_msg": exc.detail,
+            "process_status": "failed",
+        },
+    )
+
 # 配置层让日志系统统一就位,拦截层给每个请求发身份证并记录总耗时与成败,业务层在 8 个端点出错时记录带堆栈的具体失败。三者配合:一次请求进来 → 有 id
 # 贯穿、有总耗时、出错了有明细堆栈。
+# 鉴权改走 FastAPI 依赖注入（verify_api_key），Swagger UI 会出现 Authorize 按钮，能直接发 X-API-Key 头。
+# 请求进来 → CORS 处理跨域 → log_requests 打日志 → 依赖层校验 API-Key → 业务代码
+# 依赖抛 HTTPException → 统一错误信封；log_requests 在中间件层，依然能记到 401/403。
+# Security(api_key_header) = 「这是安全凭据」——FastAPI 会额外把它登记进 OpenAPI 的 securitySchemes，
+# Swagger 读到后渲染成右上角 Authorize 按钮，你填一次，之后每个请求自动带上X-API-Key 头。
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -79,7 +117,7 @@ app.add_middleware(
 )
 
 @app.get("/v1/knowledge_base")
-def get_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
+def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
     start_time = time.time()
     try:
         for retry_time in range(10):
@@ -114,7 +152,7 @@ def get_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
     )
 
 @app.get("/v1/knowledge_base/list")
-def list_knowledge_base(token: str):
+def list_knowledge_base():
     start_time = time.time()
     try:
         with Session() as session:
@@ -146,7 +184,7 @@ def list_knowledge_base(token: str):
         }
 
 @app.delete("/v1/knowledge_base")
-def delete_knowledge_base(knowledge_id: int, token: str) -> KnowledgeResponse:
+def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
     start_time = time.time()
     try:
         with Session() as session:
@@ -250,7 +288,7 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
     )
 
 @app.get("/v1/document")
-def get_document(document_id: int, token: str) -> DocumentResponse:
+def get_document(document_id: int) -> DocumentResponse:
     start_time = time.time()
     try:
         for retry_time in range(10):
@@ -288,7 +326,7 @@ def get_document(document_id: int, token: str) -> DocumentResponse:
     )
 
 @app.get("/v1/document/list")
-def list_document(knowledge_id: int, token: str):
+def list_document(knowledge_id: int):
     start_time = time.time()
     try:
         with Session() as session:
@@ -324,7 +362,7 @@ def list_document(knowledge_id: int, token: str):
         }
 
 @app.delete("/v1/document")
-def delete_document(document_id: int, token: str) -> DocumentResponse:
+def delete_document(document_id: int) -> DocumentResponse:
     start_time = time.time()
     try:
         with Session() as session:
@@ -491,6 +529,11 @@ def chat(req: RAGRequest) -> RAGResponse:
         processing_time=time.time() - start_time,
 
     )
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=config["rag"]["port"], workers=1)

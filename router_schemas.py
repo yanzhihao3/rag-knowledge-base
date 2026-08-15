@@ -5,7 +5,6 @@ from typing_extensions import Annotated
 
 class EmbeddingRequest(BaseModel):
     text: Union[str, List[str]]
-    token: str
     model: str
 
 class EmbeddingResponse(BaseModel):
@@ -17,8 +16,8 @@ class EmbeddingResponse(BaseModel):
     processing_time: float = Field(description="处理请求的耗时（秒）")
 
 class RerankRequest(BaseModel):
-    token: str
     model: str
+    text_pair: List[List[str]]
 
 class RerankResponse(BaseModel):
     request_id: str = Field(description="请求ID")

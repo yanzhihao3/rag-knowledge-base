@@ -46,6 +46,7 @@ rag:
   # llm_model: "qwen-max"  # 或者 "qwen-plus"
   llm_base: "http://localhost:11434/v1"   # 本地 Ollama
   llm_api_key: "ollama"
+  api_key: "rag-dev-key"
   llm_model: "qwen2.5:1.5b"
   embedding_model: "bge-small-zh-v1.5"
   rerank_model: "bge-reranker-base"
