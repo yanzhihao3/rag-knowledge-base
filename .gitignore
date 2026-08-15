@@ -27,10 +27,7 @@ upload_files/
 test/.pytest_cache/
 
 # Personal / interview notes
-_md/interview.md
-_md/面试准备_RAG项目.md
-_md/problems.md
-_md/SKILL.md
+_md/
 
 # OS
 .DS_Store
