@@ -415,48 +415,76 @@ class RAG:
         self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
         return sorted_records
 
-    def chat_with_rag(self, knowledge_id: int, message:List[Dict]):
-        logger.info("[chat] 收到 %d 条消息", len(message))
+    def _retrieve_context(self, knowledge_id: int, message: List[Dict]):
+        """检索 + 组装 LLM 消息，返回 (llm_messages, debug_info)。
 
+        单轮: llm_messages = [system(资料+问题)]
+        多轮: llm_messages = 历史 + system(资料) + 最后一问
+        """
+        logger.info("[chat] 收到 %d 条消息", len(message))
         if len(message) == 1:
             query = message[0]["content"]
-            related_records = self.query_document(query, knowledge_id, None)
-            debug_info = getattr(self, '_last_debug_info', None)
-            logger.info("[RAG] 检索到 %d 条记录", len(related_records))
-            related_document = _format_related_document(related_records)
-
-            rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
-                          .replace("{#QUESTION#}", query) \
-                          .replace("{#RELATED_DOCUMENT#}", related_document)
-            rag_response = self.chat(
-                [{"role": "system", "content": rag_query}],
-                0.7, 0.9
-            ).content
-            message.append({"role": "system", "content": rag_response})
+            history = None
         else:
-            # 多轮对话：从历史消息中提取最新用户问题，做 RAG 检索
             query = message[-1]["content"]
             history = message[:-1]  # 传入历史帮助 query_rewrite 理解指代
             logger.info("[chat] 历史 %d 条", len(history))
-            related_records = self.query_document(query, knowledge_id, history)
-            debug_info = getattr(self, '_last_debug_info', None)
-            related_document = _format_related_document(related_records)
 
-            rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
-                          .replace("{#QUESTION#}", query) \
-                          .replace("{#RELATED_DOCUMENT#}", related_document)
+        related_records = self.query_document(query, knowledge_id, history)
+        debug_info = getattr(self, '_last_debug_info', None) or {}
+        logger.info("[RAG] 检索到 %d 条记录", len(related_records))
+        related_document = _format_related_document(related_records)
 
+        rag_query = BASIC_QA_TEMPLATE.replace("{#TIME#}", str(datetime.datetime.now())) \
+                      .replace("{#QUESTION#}", query) \
+                      .replace("{#RELATED_DOCUMENT#}", related_document)
+
+        if len(message) == 1:
+            llm_messages = [{"role": "system", "content": rag_query}]
+        else:
             # 将 RAG 上下文插入到历史消息中，位于最后一条用户消息之前
             rag_context_message = {"role": "system", "content": rag_query}
-            messages_with_context = message[:-1] + [rag_context_message, message[-1]]
+            llm_messages = message[:-1] + [rag_context_message, message[-1]]
+        return llm_messages, debug_info
 
-            normal_response = self.chat(
-                messages_with_context,
-                0.7, 0.9
-            ).content
-            message.append({"role": "system", "content": normal_response})
+    def chat_with_rag(self, knowledge_id: int, message: List[Dict]):
+        """非流式对话（保留，供 benchmark 直接调用）。"""
+        llm_messages, debug_info = self._retrieve_context(knowledge_id, message)
+        rag_response = self.chat(llm_messages, 0.7, 0.9).content
+        message.append({"role": "system", "content": rag_response})
+        return message, debug_info
 
-        return message, debug_info or {}
+    def _stream_tokens(self, llm_messages: List[Dict], message: List[Dict]):
+        """LLM 流式生成，yield (event, data)：token / error / done。"""
+        full_response = ""
+        t_gen = time.monotonic()
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=llm_messages,
+                top_p=0.7,
+                temperature=0.9,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                content = (delta and delta.content) or ""
+                if content:
+                    full_response += content
+                    yield ("token", content)
+        except Exception as e:
+            logger.exception("[chat] 流式生成失败")
+            yield ("error", {"message": str(e)})
+            return
+        logger.info("[chat] 流式生成完成: %d tokens, 生成=%.3fs", len(full_response), time.monotonic() - t_gen)
+        message.append({"role": "system", "content": full_response})
+        yield ("done", {"message": message})
+
+    def chat_stream(self, knowledge_id: int, message: List[Dict]):
+        """流式对话入口，yield (event, data)：debug / token / error / done。"""
+        llm_messages, debug_info = self._retrieve_context(knowledge_id, message)
+        yield ("debug", debug_info)
+        yield from self._stream_tokens(llm_messages, message)
 
 
 

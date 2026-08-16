@@ -1,6 +1,7 @@
 import yaml
 import os
 import time
+import json
 import numpy as np
 import uuid
 import datetime
@@ -13,13 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from router_schemas import (
      EmbeddingRequest, EmbeddingResponse,
-     RAGRequest, RAGResponse,
+     RAGRequest,
      RerankRequest, RerankResponse,
      KnowledgeRequest, KnowledgeResponse,
      DocumentRequest, DocumentResponse,
 )
 from logging_config import setup_logging, request_id_var
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from auth import is_public_path, resolve_api_key
 from fastapi.security import APIKeyHeader
 
@@ -515,19 +516,46 @@ async def semantic_rerank(req: RerankRequest) -> RerankResponse:
         process_time=time.time() - start_time,
     )
 
-@app.post("/chat")
-def chat(req: RAGRequest) -> RAGResponse:
-    start_time = time.time()
-    message, debug_info = RAG().chat_with_rag(req.knowledge_id, req.message)
-    return RAGResponse(
-        request_id=str(uuid.uuid4()),
-        message=message,
-        debug_info=debug_info,
-        response_code=200,
-        response_msg="ok",
-        process_status="completed",
-        processing_time=time.time() - start_time,
+def _format_sse(event: str, data) -> str:
+    """把 (event, data) 格式化为 SSE 文本（事件两行 + 空行）。
 
+    token 的 data 是原始文本，可能含换行，拆成多行 data 保持语义；
+    其余事件 data 为 JSON 字符串。
+    """
+    if event == "token":
+        payload = "".join(f"data: {line}\n" for line in str(data).split("\n"))
+    else:
+        payload = f"data: {json.dumps(data, ensure_ascii=False)}\n"
+    return f"event: {event}\n{payload}\n"
+
+
+@app.post("/chat")
+def chat(req: RAGRequest):
+    start_time = time.time()
+    rag = RAG()
+    request_id = request_id_var.get()
+    # 检索/组装在 SSE 头发出之前完成：失败走 HTTPException → 统一错误信封（非200）
+    try:
+        llm_messages, debug_info = rag._retrieve_context(req.knowledge_id, req.message)
+    except Exception as e:
+        logger.exception("[chat] 检索失败: knowledge_id=%d", req.knowledge_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    def event_stream():
+        # 流式 body 在中间件 reset 之后才发送，这里重新注入 request_id，流阶段日志才能关联到请求
+        request_id_var.set(request_id)
+        yield _format_sse("debug", debug_info)
+        for event, data in rag._stream_tokens(llm_messages, req.message):
+            if event == "done":
+                total_cost = time.time() - start_time
+                data = {**data, "processing_time": total_cost}
+                logger.info("[chat] 完成: 总耗时=%.3fs", total_cost)
+            yield _format_sse(event, data)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
     )
 
 @app.get("/health")
