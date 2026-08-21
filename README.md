@@ -33,7 +33,9 @@
 │   │   └── main.js
 │   ├── vite.config.js
 │   └── package.json
-└── test/                # 单元测试
+├── test/                # 单元测试
+│   ├── benchmark_report.py         # RAG 评测脚本（召回率 / 准确率）
+│   └── benchmark_cases_rag_book.py # 评测用例（50 条，三档难度）
 ```
 
 ## 快速开始
@@ -71,7 +73,7 @@ npm run dev
 上传 PDF 文档，系统自动：
 - 提取页面文本和表格
 - 处理跨页断句
-- 按 256 tokens 分块，20 overlap
+- 按 256 字符分块（中文 1 字 ≈ 1 token），20 字符重叠
 - 批量生成 BGE 向量
 - 写入 ES 索引
 
@@ -99,6 +101,7 @@ npm run dev
 - **KNN**：向量相似度检索
 - **RRF**：Reciprocal Rank Fusion，两路结果按排名融合
 - **重排序**：bge-reranker-base Cross-Encoder 精排
+- **进 Prompt 条数**：召回/重排 10 条候选，最终只保留前 5 条（`rerank_top_k`）
 
 ### 3. 多轮对话
 
@@ -138,6 +141,25 @@ PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 - **脱敏**：对话全文、prompt 全文不落日志，只记长度，避免敏感内容泄露
 - **日志轮转**：`rag.log` 5MB 轮转、保留 3 份，防止无限膨胀
 
+### 9. 效果评测（真实数字）
+
+基于《大模型RAG实战》标注了 **50 条评测用例**（easy 13 / medium 25 / hard 12），对三种召回方式跑三个口径：
+
+| 方式 | 关键词命中 | 答案块命中 | MRR@5 |
+| --- | --- | --- | --- |
+| BM25 | 96.0% | 88.0% | 0.767 |
+| 向量 | 98.0% | 86.0% | 0.762 |
+| **融合(RRF+重排)** | 98.0% | **94.0%** | **0.870** |
+
+- **关键词命中**（弱口径）：Top-5 文本中出现任一标注关键词；
+- **答案块命中**（严格口径）：答案块本身（用特征词在知识库中定位的 ES 文档 ID）是否出现在 Top-5；
+- **MRR@5**：答案块在结果中的最佳排名的倒数均值，衡量排序质量而非单纯命中。
+
+回答准确率（5 条题，Ollama 真实生成）：无重排 **53.3%** → 有重排 **66.7%**（+13.3%），验证 bge-reranker 的价值。
+
+> 运行前提：ES 已启动、知识库已建好且文档已解析完成；确认 `benchmark_report.py` 中的 `KB_ID` 与你的知识库一致。
+> `pytest test/benchmark_report.py -v -s -k recall` 跑召回率（需 ES + 模型）；`-k accuracy` 跑回答准确率（需 Ollama）。
+
 ## API 端点
 
 | 方法 | 路径 | 说明 |
@@ -174,12 +196,21 @@ rag:
   rerank_model: "bge-reranker-base"      # 重排模型
   chunk_size: 256                        # 分块大小
   chunk_overlap: 20                      # 重叠窗口
+  chunk_candidate: 10                    # RRF 融合后召回候选数
+  rerank_top_k: 5                        # 最终进 Prompt 的条数
 ```
 
 ## 测试
 
 ```bash
 pytest test/ -v
+```
+
+RAG 评测（50 条用例 × 三口径）：
+
+```bash
+pytest test/benchmark_report.py -v -s -k recall     # 召回率：关键词 / 答案块 / MRR
+pytest test/benchmark_report.py -v -s -k accuracy   # 回答准确率（需 Ollama）
 ```
 
 ## 项目亮点
@@ -194,3 +225,4 @@ pytest test/ -v
 8. **任务状态机**：跟踪文档解析进度，指数退避重试保障可靠性
 9. **数据一致性级联删除**：三存储（SQLite / ES / 磁盘）无事务边界下，删除按「ES 先删（失败阻断）→ 文件次删（告警）→ SQLite 最后删（同事务）」清干净，杜绝幽灵分块与孤儿数据
 10. **结构化日志与监控**：request_id 串联整条请求链路，检索四段耗时拆分，敏感内容脱敏，5MB 轮转防膨胀
+11. **评测体系**：50 条基于真实知识库文档的评测用例 + 三口径指标（关键词 / 答案块 / MRR），用数据验证双路融合与重排的价值

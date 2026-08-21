@@ -35,7 +35,9 @@
 │   │   └── main.js          # 入口
 │   ├── vite.config.js
 │   └── package.json
-└── test/                # 单元测试
+├── test/                # 单元测试
+│   ├── benchmark_report.py         # RAG 评测脚本（召回率 / 准确率）
+│   └── benchmark_cases_rag_book.py # 评测用例（50 条，三档难度）
 ```
 
 ## 核心模块说明
@@ -45,8 +47,9 @@
 核心类 `RAG` 包含：
 - `get_embedding()` — 调用 BGE 模型生成向量
 - `get_rerank()` — 调用 rerank 模型重排序
-- `extract_content()` — 解析 PDF、分块、写入 ES
+- `extract_content()` — 解析 PDF、分块、写入 ES（幂等：确定性 `_id` + 解析前先清旧分块）
 - `query_document()` — 混合检索（BM25 + 向量 + RRF）
+- `query_rewrite()` — 指代/口语规则触发 + 最近 2 轮历史 + 口语转书面 + 输出校验（10s 超时回退）
 - `chat_with_rag()` — 多轮对话，组装 Prompt 调用 LLM
 
 ### es_api.py — Elasticsearch 操作
@@ -79,6 +82,8 @@ rag:
   rerank_model: "bge-reranker-base"       # 重排模型
   chunk_size: 256                         # 分块大小
   chunk_overlap: 20                       # 重叠窗口
+  chunk_candidate: 10                     # RRF 融合后召回候选数
+  rerank_top_k: 5                         # 最终进 Prompt 的条数
   use_rrf: true                           # 启用 RRF 融合
   use_rerank: true                        # 启用重排序
 ```
@@ -102,9 +107,9 @@ rag:
 ## 检索流程
 
 1. **PDF 上传** → `BackgroundTasks` 异步调用 `extract_content()` 解析页面文本
-2. **分块** → 按 256 token 分块，20 overlap
+2. **分块** → 按 256 字符分块（中文 1 字 ≈ 1 token），20 字符重叠
 3. **向量化** → BGE 生成 512 维向量，写入 ES
-4. **检索时** → Query 改写（结合历史理解指代）→ BM25 + KNN **双路并行召回** → RRF 融合 → Cross-Encoder 重排；四段耗时（改写/向量/召回/重排）单独打点记录日志
+4. **检索时** → Query 改写（规则触发，结合最近 2 轮历史理解指代）→ BM25 + KNN **双路并行召回** → RRF 融合取前 10 条 → Cross-Encoder 重排 → **只保留前 5 条（rerank_top_k）进 Prompt**；四段耗时（改写/向量/召回/重排）单独打点记录日志
 5. **生成** → 检索结果注入 Prompt → 调用 Ollama LLM
 6. **结果可视化** → `/chat` 返回 `debug_info`（改写后 query、召回chunks、RRF/重排分数），前端折叠面板展示
 
@@ -147,6 +152,8 @@ pytest test/ -v
 
 主要测试文件：
 - `test_recall.py` — 召回率测试
+- `benchmark_report.py` — RAG 评测：50 条用例 × 三口径（关键词/答案块/MRR@5）+ 回答准确率
+- `benchmark_cases_rag_book.py` — 评测用例数据（基于《大模型RAG实战》，含答案特征词）
 - `test_query_rewrite.py` — Query 改写测试
 - `test_permission.py` — 权限测试
 - `test_retry.py` — 重试逻辑测试
@@ -155,8 +162,16 @@ pytest test/ -v
 - `test_logging.py` — 日志底座测试（CI 可跑）
 - `test_utils.py` — 工具函数测试（`safe_remove_file` 等）
 
+评测运行（需 ES + 模型；准确率评测还需 Ollama）：
+
+```bash
+pytest test/benchmark_report.py -v -s -k recall     # 召回率：关键词 / 答案块 / MRR
+pytest test/benchmark_report.py -v -s -k accuracy   # 回答准确率（有/无重排对比）
+```
+
 ## 常见问题
 
 1. **Ollama 未运行** — 确保 `ollama serve` 启动，且模型已拉取
 2. **ES 索引不存在** — 首次上传文档时自动创建
 3. **向量维度不匹配** — 检查 config.yaml 中 `dims: 512` 与模型一致
+4. **评测全 0%** — 检查 ES 是否启动、`benchmark_report.py` 的 `KB_ID` 是否与知识库一致、文档是否已解析完成
