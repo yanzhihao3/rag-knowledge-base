@@ -9,7 +9,7 @@ from openai import OpenAI
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from sentence_transformers import SentenceTransformer
-from es_api import es
+from es_api import es, delete_document_chunks
 import os
 from concurrent.futures import ThreadPoolExecutor
 from utils import with_retry, TaskStateMachine, task_state_machine
@@ -117,6 +117,62 @@ def split_incomplete_sentence(text):
     last = matches[-1]
     return stripped[:last.end()], stripped[last.end():]
 
+
+# 触发改写的标记：指代词 / 口语词 / 口语语气词
+# （“其它”里的“它”不算指代，用负向断言排除）
+_NEEDS_REWRITE_RE = re.compile(
+    r"(?<!其)它|这|那|这些|那些|它们|这个|那个|"
+    r"咋|啥|搞|弄|呗|啦|来着|啥子|咋样|咋整|玩意儿|再说|再讲"
+)
+# 极短问题往往是省略句（如“性能呢？”），也触发改写
+_SHORT_QUERY_TRIGGER_LEN = 4
+
+# 改写输出里常见的前缀/引号，需要清洗
+_REWRITE_PREFIX_RE = re.compile(r"^(改写结果|改写|结果|答)[：:\s]*")
+
+
+def _needs_rewrite(query: str) -> bool:
+    """判断问题是否需要改写：指代 / 口语化 / 极短省略句。"""
+    q = (query or "").strip()
+    if not q:
+        return False
+    if _NEEDS_REWRITE_RE.search(q):
+        return True
+    return len(q) <= _SHORT_QUERY_TRIGGER_LEN
+
+
+def _extract_recent_turns(history: List[Dict], max_turns: int = 2):
+    """从历史里取最近 max_turns 轮一问一答，按时间正序返回 [(user, assistant), ...]。
+
+    约定：本系统把助手回答以 role=system 存进历史，user 为用户消息。
+    按消息类型收集，而不是依赖固定下标，对消息顺序更稳健。
+    """
+    turns = []
+    assistant_msg = ""
+    for msg in reversed(history):
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "system":
+            assistant_msg = content
+        elif role == "user":
+            turns.append((content, assistant_msg))
+            assistant_msg = ""
+            if len(turns) >= max_turns:
+                break
+    turns.reverse()
+    return turns
+
+
+def _clean_rewritten(text, original: str) -> str:
+    """清洗改写输出：去前缀/引号；为空或异常长则回退原问题。"""
+    out = (text or "").strip()
+    out = _REWRITE_PREFIX_RE.sub("", out).strip()
+    out = out.strip('"\'“”‘’「」')
+    if not out or len(out) > 300:
+        return original
+    return out
+
+
 class RAG:
     def __init__(self):
         self.embedding_model = config["rag"]["embedding_model"]
@@ -128,6 +184,9 @@ class RAG:
         self.chunk_size = config["rag"]["chunk_size"]
         self.chunk_overlap = config["rag"]["chunk_overlap"]
         self.chunk_candidate = config["rag"]["chunk_candidate"]
+        # 最终进 Prompt 的条数：召回/重排阶段保留 chunk_candidate 条保证召回率，
+        # 最后一步截断到 rerank_top_k 条，控制噪音与上下文长度。
+        self.rerank_top_k = config["rag"].get("rerank_top_k", 5)
 
         self.client = OpenAI(
             api_key=config["rag"]["llm_api_key"],
@@ -138,12 +197,17 @@ class RAG:
     def _extract_pdf_content(self, knowledge_id, document_id, title, file_path) -> bool:
         try:
             pdf = pdfplumber.open(file_path)
-        except:
+        except Exception:
             logger.warning("打开 PDF 失败: %s", file_path)
-            return False
+            raise
         logger.info("PDF %s 共 %d 页", file_path, len(pdf.pages))
 
         try:
+            # 幂等写入第一步：解析前先清掉该文档残留的分块/摘要。
+            # 配合下方“确定性 _id 覆盖写”，即使解析中途失败被 @with_retry 重试，
+            # 每次尝试都从干净状态开始，不会产生重复分块。
+            delete_document_chunks(document_id)
+
             abstract = ""
             prev_page_tail = ""  # 跨页断句：保存上页末尾的不完整句子
 
@@ -196,7 +260,11 @@ class RAG:
                     "chunk_tables": [table_content] if table_content else [],
                     "embedding_vector": [float(x) for x in list(embedding_vector)]
                 }
-                response = es.index(index="chunk_info", document=page_data)
+                es.index(
+                    index="chunk_info",
+                    id=f"doc_{document_id}_page_{page_number}",
+                    document=page_data,
+                )
 
                 # 分块向量
                 page_chunks = split_text_with_overlap(current_page_text, self.chunk_size, self.chunk_overlap)
@@ -215,7 +283,11 @@ class RAG:
                         "embedding_vector": [float(x) for x in list(embedding_vector[chunk_idx - 1])]
 
                     }
-                    response = es.index(index="chunk_info", document=page_data)
+                    es.index(
+                        index="chunk_info",
+                        id=f"doc_{document_id}_page_{page_number}_chunk_{chunk_idx}",
+                        document=page_data,
+                    )
 
             document_data = {
                 "document_id": document_id,
@@ -226,7 +298,12 @@ class RAG:
                 "file_path": file_path,
                 "abstract": abstract,
             }
-            response = es.index(index="document_meta", document=document_data)
+            es.index(
+                index="document_meta",
+                id=f"docmeta_{document_id}",
+                document=document_data,
+            )
+            return True
         finally:
             pdf.close()
 
@@ -238,11 +315,17 @@ class RAG:
         doc_id_str = str(document_id)
         task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_PROCESSING)
 
+        # 类型白名单：只处理明确支持的 PDF；Word/未知类型直接置为失败，
+        # 绝不静默“成功”（以前 Word 走到 pass 后照样上报 completed）。
+        # 判断依据优先看服务端可控的文件扩展名，不轻信客户端自报的 content_type。
+        is_pdf = ("pdf" in (file_type or "")) or str(file_path or "").lower().endswith(".pdf")
+        if not is_pdf:
+            task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_FAILED)
+            logger.warning("不支持的文件类型，文档解析失败: document_id=%s file_type=%s", document_id, file_type)
+            return
+
         try:
-            if "pdf" in file_type:
-                self._extract_pdf_content(knowledge_id, document_id, title, file_path)
-            elif "word" in file_type:
-                pass
+            self._extract_pdf_content(knowledge_id, document_id, title, file_path)
             task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_COMPLETED)
             logger.info("文档提取完成 document_id=%s file_type=%s path=%s", document_id, file_type, file_path)
         except Exception as e:
@@ -354,7 +437,7 @@ class RAG:
             else:
                 fusion_score[_id] += 1 / (idx + k)
             if _id not in search_id2record:
-                search_id2record[_id] = record["fields"]
+                search_id2record[_id] = {**record["fields"], "_id": _id}
 
         for idx, record in enumerate(vector_search_response["hits"]["hits"]):
             _id = record["_id"]
@@ -363,7 +446,7 @@ class RAG:
             else:
                 fusion_score[_id] += 1 / (idx + k)
             if _id not in search_id2record:
-                search_id2record[_id] = record["fields"] # 把这个文档块的所有字段存下来，以它的 _id 为 key。
+                search_id2record[_id] = {**record["fields"], "_id": _id}  # 附带 _id，便于评估时定位答案块
 
         # 按总分排序，取前chunk_candidate条（config里是10条）
         sorted_dict = sorted(fusion_score.items(), key=lambda kv: kv[1], reverse=True)
@@ -405,6 +488,12 @@ class RAG:
             debug_chunks = [debug_chunks[i] for i in rerank_idx]
             for i, idx in enumerate(rerank_idx):
                 debug_chunks[i]["rerank_score"] = round(float(rerank_score[idx]), 4)
+
+        # 最终只保留前 rerank_top_k 条：重排（或 RRF）后的排序已确定，多余的候选
+        # 大概率是噪音，塞进 Prompt 只会干扰 LLM，还拉长生成时间。
+        sorted_records = sorted_records[:self.rerank_top_k]
+        sorted_content = sorted_content[:self.rerank_top_k]
+        debug_chunks = debug_chunks[:self.rerank_top_k]
 
         t4 = time.monotonic()
         logger.info(
@@ -489,13 +578,16 @@ class RAG:
 
 
 
-    def chat(self, message: List[Dict], top_p: float, temperature: float) -> Any:
-        completion = self.client.chat.completions.create(
+    def chat(self, message: List[Dict], top_p: float, temperature: float, timeout: float = None) -> Any:
+        kwargs = dict(
             model=self.llm_model,
             messages=message,
             top_p=top_p,
             temperature=temperature,
         )
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        completion = self.client.chat.completions.create(**kwargs)
         return completion.choices[0].message
 
     def query_parse(self, query: str) -> str:
@@ -509,18 +601,24 @@ class RAG:
             logger.debug("无历史对话，使用原问题: %s", query)
             return query
 
-        # 提取上一轮对话内容作为上下文
-        last_user_msg = history[-2].get("content", "") if len(history) >= 2 else ""
-        last_ai_msg = ""
-        for msg in reversed(history):
-            if msg.get("role") == "system":
-                last_ai_msg = msg.get("content", "")
-                break
+        # 规则先筛：没有指代/口语标记、且长度足够的完整问题，不值得花一次 LLM 调用
+        if not _needs_rewrite(query):
+            logger.debug("问题完整，跳过改写: %s", query)
+            return query
+
+        # 取最近 2 轮一问一答作为上下文（按消息类型收集，而非依赖固定下标）
+        turns = _extract_recent_turns(history, max_turns=2)
+        history_text = "\n".join(
+            f"用户：{user_msg}\n助手：{assistant_msg[:200]}"
+            for user_msg, assistant_msg in turns
+        )
 
         prompt = f"""你只做问题改写，不要回答问题。
 
-把用户的问题改写成完整表达，消除指代词（它、这、那、它们等）。
-如果有省略部分，补充完整。如果问题已经完整，原样输出。
+把用户的问题改写成适合检索的完整书面语，要求：
+1. 消除指代词（它、这、那、它们等），把省略的部分补充完整；
+2. 口语化表达改写成正式书面语（例如“咋搞的”→“是如何实现的”）；
+3. 如果问题已经完整且书面，原样输出。
 
 只输出改写后的句子，不要任何解释。
 
@@ -528,12 +626,11 @@ class RAG:
 问：它是什么？
 答：RAG是什么？
 
-问：它怎么实现的？
-答：RAG怎么实现的？
+问：它咋搞的？
+答：RAG是如何实现的？
 
 对话历史：
-用户：{last_user_msg}
-助手：{last_ai_msg[:200]}
+{history_text}
 
 当前问题：{query}
 改写结果："""
@@ -541,11 +638,12 @@ class RAG:
         try:
             response = self.chat(
                 [{"role": "user", "content": prompt}],
-                0.3, 0.5
+                0.3, 0.5,
+                timeout=10,
             )
-            rewritten = response.content.strip()
+            rewritten = _clean_rewritten(response.content, query)
             logger.info("[Query改写] 原始=%s -> 改写=%s", query, rewritten)
-            return rewritten if rewritten else query
+            return rewritten
         except Exception as e:
             logger.warning("Query改写失败，使用原问题: %s", e)
             return query
