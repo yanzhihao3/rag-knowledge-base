@@ -42,77 +42,9 @@ _OK = "[OK]"
 _FAIL = "[FAIL]"
 
 # ============================================================
-# 测试数据集（基于 kb_id=1 实际文档内容设计）
-# 难度分级：
-#   easy   - 关键词可直接匹配
-#   medium - 需要语义理解或同义表达
-#   hard   - 需要深度理解的细节问题
-# ============================================================
-BENCHMARK_CASES = [
-    # ── easy: BM25 也能搞定的 ──
-    {
-        "query": "RAG的原理是什么",
-        "relevant_keywords": ["检索增强生成", "Retrieval Augmented", "检索", "生成"],
-        "expected_points": ["检索", "生成", "增强"],
-        "difficulty": "easy",
-    },
-    {
-        "query": "为什么要用提示学习",
-        "relevant_keywords": ["提示学习", "Prompting", "微调", "预训练"],
-        "expected_points": ["微调", "预训练", "提示"],
-        "difficulty": "easy",
-    },
-    # ── medium: 需要语义泛化 ──
-    {
-        "query": "RAG系统相比直接微调大模型有什么优势",
-        "relevant_keywords": ["知识更新", "训练成本", "微调", "数据泄露", "知识库"],
-        "expected_points": ["知识更新", "训练", "成本"],
-        "difficulty": "medium",
-    },
-    {
-        "query": "怎么把文档切成小块存入ES",
-        "relevant_keywords": ["分块", "chunk", "overlap", "pdfplumber", "索引", "es"],
-        "expected_points": ["分块", "chunk", "索引"],
-        "difficulty": "medium",
-    },
-    {
-        "query": "哪些因素会影响RAG系统的回答质量",
-        "relevant_keywords": ["检索", "召回", "知识库", "覆盖", "分块"],
-        "expected_points": ["检索", "知识库", "召回"],
-        "difficulty": "medium",
-    },
-    # ── hard: 需要深度语义匹配 ──
-    {
-        "query": "在构建RAG系统时检索部分为什么重要",
-        "relevant_keywords": ["检索部分", "非常重要", "花费大量时间", "召回", "打磨"],
-        "expected_points": ["检索", "召回", "质量"],
-        "difficulty": "hard",
-    },
-    {
-        "query": "RETRO论文证明了什么结论",
-        "relevant_keywords": ["RETRO", "1/25", "参数量", "Trillions of Tokens"],
-        "expected_points": ["RETRO", "参数量"],
-        "difficulty": "hard",
-    },
-    {
-        "query": "检索增强生成如何解决大模型的知识更新问题",
-        "relevant_keywords": ["知识更新", "RAG", "微调", "继续预训练", "新知识"],
-        "expected_points": ["知识更新", "RAG"],
-        "difficulty": "hard",
-    },
-    {
-        "query": "ES的密集向量检索是如何配置的",
-        "relevant_keywords": ["dense_vector", "embedding", "HNSW", "int8_hnsw", "KNN"],
-        "expected_points": ["dense_vector", "KNN", "HNSW"],
-        "difficulty": "hard",
-    },
-    {
-        "query": "多路召回合并时RRF算法如何给不同检索结果打分",
-        "relevant_keywords": ["RRF", "倒数排序", "分数", "排名", "融合"],
-        "expected_points": ["RRF", "排名", "融合"],
-        "difficulty": "hard",
-    },
-]
+# 评测用例：基于《大模型RAG实战》标注的 50 条（数据见 benchmark_cases_rag_book.py）
+# 难度分级：easy - 关键词可直接匹配；medium - 需要语义理解；hard - 需要深度细节
+from test.benchmark_cases_rag_book import BENCHMARK_CASES
 
 KB_ID = 1
 TOP_K = 5
@@ -153,6 +85,40 @@ def _extract_chunks(results):
     return chunks
 
 
+def _extract_hits(hits):
+    """从 ES hits 提取 (chunk_id, chunk_content)。"""
+    out = []
+    for h in hits:
+        cc = h.get("fields", {}).get("chunk_content") or [""]
+        out.append((h["_id"], cc[0] if isinstance(cc, list) else cc))
+    return out
+
+
+def _load_chunks_by_id(kb_id):
+    """加载知识库全部分块 (id -> content)，用于按 answer_terms 定位答案块。"""
+    from es_api import es
+    resp = es.search(
+        index="chunk_info",
+        size=10000,
+        query={"term": {"knowledge_id": kb_id}},
+        fields=["chunk_content"],
+        source=False,
+    )
+    out = {}
+    for h in resp["hits"]["hits"]:
+        cc = h.get("fields", {}).get("chunk_content") or [""]
+        out[h["_id"]] = (cc[0] if isinstance(cc, list) else cc) or ""
+    return out
+
+
+def _answer_chunk_ids(item, chunks_by_id):
+    """用 answer_terms 在知识库分块里定位该题的答案块 ID 集合。"""
+    terms = [t.lower() for t in item.get("answer_terms", [])]
+    if not terms:
+        return set()
+    return {cid for cid, content in chunks_by_id.items() if any(t in content.lower() for t in terms)}
+
+
 # ============================================================
 # 召回率评测
 # ============================================================
@@ -162,48 +128,65 @@ class TestRecall:
     def setup_method(self):
         self.rag = RAG()
         self.es_available = False
+        self.chunks_by_id = {}
         try:
             from es_api import es
             if es.ping():
                 self.es_available = True
         except Exception:
             pass
+        try:
+            self.chunks_by_id = _load_chunks_by_id(KB_ID)
+        except Exception:
+            pass
 
     def _search_bm25(self, query):
         rewritten = self.rag.query_rewrite(query, None)
         res = self.rag._word_search(rewritten, KB_ID)
-        return _extract_chunks([
-            {"chunk_content": h["fields"].get("chunk_content", [""])[0]}
-            for h in res["hits"]["hits"][:TOP_K]
-        ])
+        return _extract_hits(res["hits"]["hits"][:TOP_K])
 
     def _search_vector(self, query):
         rewritten = self.rag.query_rewrite(query, None)
         vec = self.rag.get_embedding(rewritten)
         res = self.rag._vector_search(vec, KB_ID)
-        return _extract_chunks([
-            {"chunk_content": h["fields"].get("chunk_content", [""])[0]}
-            for h in res["hits"]["hits"][:TOP_K]
-        ])
+        return _extract_hits(res["hits"]["hits"][:TOP_K])
 
     def _search_fusion(self, query):
-        results = self.rag.query_document(query, KB_ID, None)
-        return _extract_chunks(results[:TOP_K])
+        results = self.rag.query_document(query, KB_ID, None)[:TOP_K]
+        out = []
+        for r in results:
+            cc = r.get("chunk_content") or [""]
+            out.append((r.get("_id", ""), cc[0] if isinstance(cc, list) else cc))
+        return out
 
     def _run_one_method(self, label, search_fn):
-        hits = 0
+        n = len(BENCHMARK_CASES)
+        kw_hits = 0
+        strict_hits = 0
+        mrr_sum = 0.0
         details = []
         for item in BENCHMARK_CASES:
             try:
-                chunks = search_fn(item["query"])
-                hit = _is_hit(chunks[:TOP_K], item["relevant_keywords"])
-                hits += int(hit)
-                details.append((item["query"], item["difficulty"], hit))
+                top = search_fn(item["query"])  # [(chunk_id, content)]
             except Exception as e:
                 print(f"    [ERR] {item['query']}: {e}")
-                details.append((item["query"], item["difficulty"], False))
-        recall = hits / len(BENCHMARK_CASES)
-        return recall, hits, details
+                details.append((item["query"], item["difficulty"], False, False, None))
+                continue
+
+            contents = [c for _, c in top]
+            kw_hit = _is_hit(contents, item["relevant_keywords"])
+            gold = _answer_chunk_ids(item, self.chunks_by_id)
+            # 严格口径：答案块本身是否出现在 Top-5，以及它的最佳排名（MRR）
+            rank = next((i + 1 for i, (cid, _) in enumerate(top) if cid in gold), None)
+            strict_hit = rank is not None
+
+            kw_hits += int(kw_hit)
+            strict_hits += int(strict_hit)
+            if rank:
+                mrr_sum += 1.0 / rank
+            details.append((item["query"], item["difficulty"], kw_hit, strict_hit, rank))
+
+        return kw_hits / n, strict_hits / n, mrr_sum / n, details
 
     def test_es_check(self):
         if not self.es_available:
@@ -213,28 +196,28 @@ class TestRecall:
     def test_recall_bm25(self):
         if not self.es_available:
             pytest.skip("ES 不可用")
-        recall, hits, details = self._run_one_method("BM25", self._search_bm25)
-        print(f"\n  BM25 Top-{TOP_K}: {recall*100:.1f}% ({hits}/{len(BENCHMARK_CASES)})")
-        for q, diff, hit in details:
-            print(f"    [{diff}] {_OK if hit else _FAIL} {q}")
+        kw, strict, mrr, details = self._run_one_method("BM25", self._search_bm25)
+        print(f"\n  BM25 关键词Top-{TOP_K}: {kw*100:.1f}%  答案块命中: {strict*100:.1f}%  MRR@{TOP_K}: {mrr:.3f}")
+        for q, diff, kh, sh, rank in details:
+            print(f"    [{diff}] 关键词{_OK if kh else _FAIL} 答案块{_OK if sh else _FAIL} rank={rank}  {q}")
 
     @pytest.mark.dependency(name="recall_vector")
     def test_recall_vector(self):
         if not self.es_available:
             pytest.skip("ES 不可用")
-        recall, hits, details = self._run_one_method("Vector", self._search_vector)
-        print(f"\n  Vector Top-{TOP_K}: {recall*100:.1f}% ({hits}/{len(BENCHMARK_CASES)})")
-        for q, diff, hit in details:
-            print(f"    [{diff}] {_OK if hit else _FAIL} {q}")
+        kw, strict, mrr, details = self._run_one_method("Vector", self._search_vector)
+        print(f"\n  Vector 关键词Top-{TOP_K}: {kw*100:.1f}%  答案块命中: {strict*100:.1f}%  MRR@{TOP_K}: {mrr:.3f}")
+        for q, diff, kh, sh, rank in details:
+            print(f"    [{diff}] 关键词{_OK if kh else _FAIL} 答案块{_OK if sh else _FAIL} rank={rank}  {q}")
 
     @pytest.mark.dependency(name="recall_fusion")
     def test_recall_fusion(self):
         if not self.es_available:
             pytest.skip("ES 不可用")
-        recall, hits, details = self._run_one_method("Fusion", self._search_fusion)
-        print(f"\n  Fusion Top-{TOP_K}: {recall*100:.1f}% ({hits}/{len(BENCHMARK_CASES)})")
-        for q, diff, hit in details:
-            print(f"    [{diff}] {_OK if hit else _FAIL} {q}")
+        kw, strict, mrr, details = self._run_one_method("Fusion", self._search_fusion)
+        print(f"\n  Fusion 关键词Top-{TOP_K}: {kw*100:.1f}%  答案块命中: {strict*100:.1f}%  MRR@{TOP_K}: {mrr:.3f}")
+        for q, diff, kh, sh, rank in details:
+            print(f"    [{diff}] 关键词{_OK if kh else _FAIL} 答案块{_OK if sh else _FAIL} rank={rank}  {q}")
 
     @pytest.mark.dependency(
         name="recall_summary",
@@ -256,31 +239,22 @@ class TestRecall:
 
         results = {}
         for label, fn in methods:
-            recall, hits, details = self._run_one_method(label, fn)
-            results[label] = (recall, hits, details)
+            kw, strict, mrr, details = self._run_one_method(label, fn)
+            results[label] = (kw, strict, mrr, details)
 
         # 汇总表
-        print(f"\n  {'Method':<16} {'Recall':>8} {'Easy':>8} {'Med':>8} {'Hard':>8}")
-        print(f"  {'-'*52}")
-        for label, (recall, hits, details) in results.items():
-            by_diff = {"easy": 0, "medium": 0, "hard": 0}
-            easy_n = sum(1 for c in BENCHMARK_CASES if c["difficulty"] == "easy")
-            med_n = sum(1 for c in BENCHMARK_CASES if c["difficulty"] == "medium")
-            hard_n = sum(1 for c in BENCHMARK_CASES if c["difficulty"] == "hard")
-            for q, diff, hit in details:
-                if hit:
-                    by_diff[diff] += 1
-            e_str = f"{by_diff['easy']}/{easy_n}" if easy_n else "-"
-            m_str = f"{by_diff['medium']}/{med_n}" if med_n else "-"
-            h_str = f"{by_diff['hard']}/{hard_n}" if hard_n else "-"
-            print(f"  {label:<16} {recall*100:>7.1f}% {e_str:>8} {m_str:>8} {h_str:>8}")
+        print(f"\n  {'Method':<12} {'关键词命中':>10} {'答案块命中':>10} {'MRR@5':>8}")
+        print(f"  {'-'*48}")
+        for label, (kw, strict, mrr, details) in results.items():
+            print(f"  {label:<12} {kw*100:>9.1f}% {strict*100:>9.1f}% {mrr:>8.3f}")
 
-        # BM25 -> Fusion 提升
-        b_r = results.get("BM25", (0, 0, []))[0]
-        f_r = results.get("Fusion(RRF)", (0, 0, []))[0]
-        if b_r > 0:
-            imp = (f_r - b_r) / b_r * 100
-            print(f"\n  多路融合 vs BM25 提升: {imp:+.1f}%")
+        # 答案块命中：Fusion 相对 BM25 / Vector 的提升
+        b = results.get("BM25", (0, 0, 0, []))
+        v = results.get("Vector", (0, 0, 0, []))
+        f = results.get("Fusion(RRF)", (0, 0, 0, []))
+        if b[1] > 0:
+            print(f"\n  答案块命中 融合 vs BM25: {(f[1]-b[1])*100:+.1f}%   融合 vs Vector: {(f[1]-v[1])*100:+.1f}%")
+            print(f"  MRR@5     融合 vs BM25: {f[2]-b[2]:+.3f}   融合 vs Vector: {f[2]-v[2]:+.3f}")
         print(f"{'='*60}\n")
 
 
@@ -305,10 +279,10 @@ class TestAccuracy:
         original = self.rag.use_rerank
         self.rag.use_rerank = use_rerank
         try:
-            messages = self.rag.chat_with_rag(KB_ID, [{"role": "user", "content": query}])
+            messages, _ = self.rag.chat_with_rag(KB_ID, [{"role": "user", "content": query}])
             for msg in reversed(messages):
-                if msg["role"] == "system":
-                    return msg["content"]
+                if msg.get("role") == "system":
+                    return msg.get("content", "")
             return ""
         finally:
             self.rag.use_rerank = original
