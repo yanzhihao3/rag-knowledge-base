@@ -1,5 +1,8 @@
 import yaml
 import os
+import re
+import secrets
+import sqlite3
 import time
 import json
 import numpy as np
@@ -7,6 +10,7 @@ import uuid
 import datetime
 import logging
 import uvicorn
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from typing_extensions import Annotated
 from typing import List, Dict
 from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException, Security
@@ -39,6 +43,83 @@ logger = logging.getLogger(__name__)
 #project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #config_path = os.path.join(project_root, 'config.yaml')
 
+# 只有数据库层的暂时性错误（如 SQLite 写锁 "database is locked"）才值得重试；
+# 业务/参数/逻辑错误重试没有意义，直接抛出。
+_RETRYABLE_DB_ERRORS = (sqlite3.OperationalError, SQLAlchemyOperationalError)
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 0.2
+
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
+_UPLOAD_DIR = "upload_files"
+
+
+def _db_operation_with_retry(fn, *args, **kwargs):
+    """执行数据库操作，遇到锁等暂时性错误时指数退避重试。"""
+    last_exc = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except _RETRYABLE_DB_ERRORS as exc:
+            last_exc = exc
+            if attempt < _RETRY_ATTEMPTS - 1:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "[DB重试] %s 第%d次失败，%.1fs后重试: %s",
+                    getattr(fn, "__name__", str(fn)), attempt + 1, delay, exc,
+                )
+                time.sleep(delay)
+    logger.error("[DB重试耗尽] %s 失败: %s", getattr(fn, "__name__", str(fn)), last_exc)
+    raise last_exc
+
+
+def _sanitize_filename(filename: str) -> str:
+    """把客户端文件名清洗成安全的纯文件名（去掉路径、非法字符）。"""
+    if not filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+    # 统一分隔符后只保留最后一段，消除 ../、..\ 这类路径穿越
+    base = os.path.basename(filename.replace("\\", "/"))
+    # 去掉 Windows/Linux 下的非法字符和控制字符
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base).strip().strip(".")
+    if not base or base in {".", ".."}:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return base
+
+
+def _validate_upload_filename(filename: str) -> None:
+    """上传入口校验：文件名必须安全，且扩展名在白名单内。"""
+    base = _sanitize_filename(filename)
+    ext = os.path.splitext(base)[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {ext or '无扩展名'}，仅支持 {sorted(ALLOWED_UPLOAD_EXTENSIONS)}",
+        )
+
+
+def _safe_upload_path(document_id: int, filename: str) -> str:
+    """生成服务端控制的上传落盘路径，并兜底校验路径不越界。"""
+    base = _sanitize_filename(filename)
+    os.makedirs(_UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(_UPLOAD_DIR, f"document_{document_id}_{base}")
+    uploads_abs = os.path.abspath(_UPLOAD_DIR)
+    if os.path.commonpath([uploads_abs, os.path.abspath(file_path)]) != uploads_abs:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return file_path
+
+
+def _rollback_partial_document(document_id: int, file_path: str) -> None:
+    """上传中途失败时回收残留：删物理文件 + 删刚插入的 DB 行。"""
+    safe_remove_file(file_path)
+    try:
+        with Session() as session:
+            session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.document_id == document_id
+            ).delete()
+            session.commit()
+    except Exception:
+        logger.exception("回滚残留文档记录失败: document_id=%d", document_id)
+
+
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
@@ -52,7 +133,8 @@ def verify_api_key(request: Request, provided: str = Security(api_key_header)):
         return
     if provided is None:
         raise HTTPException(status_code=401, detail="missing API key")
-    if provided != API_KEY:
+    # 恒定时间比较，避免通过响应耗时猜测 key（时序攻击）
+    if not secrets.compare_digest(provided, API_KEY):
         raise HTTPException(status_code=403, detail="invalid API key")
 
 
@@ -74,7 +156,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "request_id": str(uuid.uuid4()),
+            "request_id": request_id_var.get(),
             "response_code": exc.status_code,
             "response_msg": exc.detail,
             "process_status": "failed",
@@ -121,23 +203,39 @@ app.add_middleware(
 def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
     start_time = time.time()
     try:
-        for retry_time in range(10):
+        def _query():
             with Session() as session:
-                record = session.query(KnowledgeDatabase).filter(KnowledgeDatabase.knowledge_id == knowledge_id).first()
-                if record is not None:
-                    return KnowledgeResponse(
-                        request_id=str(uuid.uuid4()),
-                        knowledge_id=knowledge_id,
-                        title=str(record.title),
-                        category=str(record.category),
-                        owner_id=record.owner_id,
-                        department_id=record.department_id,
-                        response_code=200,
-                        response_msg="查询知识库成功",
-                        process_status="completed",
-                        process_time=time.time() - start_time,
-                    )
-    except Exception as e:
+                return session.query(KnowledgeDatabase).filter(
+                    KnowledgeDatabase.knowledge_id == knowledge_id
+                ).first()
+
+        record = _db_operation_with_retry(_query)
+        if record is not None:
+            return KnowledgeResponse(
+                request_id=str(uuid.uuid4()),
+                knowledge_id=knowledge_id,
+                title=str(record.title),
+                category=str(record.category),
+                owner_id=record.owner_id,
+                department_id=record.department_id,
+                response_code=200,
+                response_msg="查询知识库成功",
+                process_status="completed",
+                process_time=time.time() - start_time,
+            )
+        return KnowledgeResponse(
+            request_id=str(uuid.uuid4()),
+            knowledge_id=knowledge_id,
+            title="",
+            category="",
+            owner_id=0,
+            department_id=0,
+            response_code=404,
+            response_msg="知识库不存在",
+            process_status="failed",
+            process_time=time.time() - start_time,
+        )
+    except Exception:
         logger.exception("查询知识库失败: knowledge_id=%d", knowledge_id)
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
@@ -146,8 +244,8 @@ def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
         category="",
         owner_id=0,
         department_id=0,
-        response_code=404,
-        response_msg="知识库不存在",
+        response_code=500,
+        response_msg="查询知识库失败",
         process_status="failed",
         process_time=time.time() - start_time,
     )
@@ -245,7 +343,7 @@ def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
 def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
     start_time = time.time()
     try:
-        for retry_time in range(10):
+        def _insert():
             with Session() as session:
                 record = KnowledgeDatabase(
                     title=req.title,
@@ -259,21 +357,23 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
                 session.flush()
                 knowledge_id = record.knowledge_id
                 session.commit()
-            return KnowledgeResponse(
-                request_id=str(uuid.uuid4()),
-                knowledge_id=knowledge_id,
-                title=req.title,
-                category=req.category,
-                owner_id=req.owner_id,
-                department_id=req.department_id,
-                response_code=200,
-                response_msg="知识库插入成功",
-                process_status="completed",
-                process_time=time.time() - start_time,
-            )
-    except Exception as e:
+                return knowledge_id
+
+        knowledge_id = _db_operation_with_retry(_insert)
+        return KnowledgeResponse(
+            request_id=str(uuid.uuid4()),
+            knowledge_id=knowledge_id,
+            title=req.title,
+            category=req.category,
+            owner_id=req.owner_id,
+            department_id=req.department_id,
+            response_code=200,
+            response_msg="知识库插入成功",
+            process_status="completed",
+            process_time=time.time() - start_time,
+        )
+    except Exception:
         logger.exception("新增知识库失败: title=%s", req.title)
-        pass
     return KnowledgeResponse(
         request_id=str(uuid.uuid4()),
         knowledge_id=0,
@@ -281,7 +381,7 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
         category="",
         owner_id=0,
         department_id=0,
-        response_code=404,
+        response_code=500,
         response_msg="知识库插入失败",
         process_status="failed",
         process_time=time.time() - start_time,
@@ -292,26 +392,40 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
 def get_document(document_id: int) -> DocumentResponse:
     start_time = time.time()
     try:
-        for retry_time in range(10):
+        def _query():
             with Session() as session:
-                record = session.query(KnowledgeDocument).filter(KnowledgeDocument.document_id == document_id).first()
-                if record is not None:
-                    return DocumentResponse(
-                        request_id=str(uuid.uuid4()),
-                        document_id=document_id,
-                        title=record.title,
-                        category=record.category,
-                        knowledge_id=record.knowledge_id,
-                        file_type=record.file_type,
-                        response_code=200,
-                        response_msg="查询文档成功",
-                        process_status="completed",
-                        process_time=time.time() - start_time,
-                    )
-                break
-    except Exception as e:
+                return session.query(KnowledgeDocument).filter(
+                    KnowledgeDocument.document_id == document_id
+                ).first()
+
+        record = _db_operation_with_retry(_query)
+        if record is not None:
+            return DocumentResponse(
+                request_id=str(uuid.uuid4()),
+                document_id=document_id,
+                title=record.title,
+                category=record.category,
+                knowledge_id=record.knowledge_id,
+                file_type=record.file_type,
+                response_code=200,
+                response_msg="查询文档成功",
+                process_status="completed",
+                process_time=time.time() - start_time,
+            )
+        return DocumentResponse(
+            request_id=str(uuid.uuid4()),
+            document_id=document_id,
+            title="",
+            category="",
+            knowledge_id=0,
+            file_type="",
+            response_code=404,
+            response_msg="文档不存在",
+            process_status="failed",
+            process_time=time.time() - start_time,
+        )
+    except Exception:
         logger.exception("查询文档失败: document_id=%d", document_id)
-        pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
         document_id=document_id,
@@ -319,8 +433,8 @@ def get_document(document_id: int) -> DocumentResponse:
         category="",
         knowledge_id=0,
         file_type="",
-        response_code=404,
-        response_msg="文档不存在",
+        response_code=500,
+        response_msg="查询文档失败",
         process_status="failed",
         process_time=time.time() - start_time,
 
@@ -420,12 +534,20 @@ def add_document(
     start_time = time.time()
     response_msg = "新增文档失败"
     try:
-        for retry_time in range(10):
+        # 上传文件名先校验：拒绝路径穿越、非法字符和不支持的扩展名（尽早拦截，不留脏数据）
+        _validate_upload_filename(file.filename)
+        # 内容一次性读入内存：重试写文件时文件流不会因已消费而变空
+        content = file.file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="文件内容为空")
+
+        def _create_document():
             with Session() as session:
-                record = session.query(KnowledgeDatabase).filter(KnowledgeDatabase.knowledge_id == knowledge_id).first()
-                if record is None:
-                    response_msg = "知识库不存在， 请提前创建"
-                    break
+                kb = session.query(KnowledgeDatabase).filter(
+                    KnowledgeDatabase.knowledge_id == knowledge_id
+                ).first()
+                if kb is None:
+                    return None
                 record = KnowledgeDocument(
                     title=title,
                     category=category,
@@ -440,37 +562,63 @@ def add_document(
                 session.flush()
                 document_id = record.document_id
                 session.commit()
-                file_path = f"upload_files/document_{document_id}_" + file.filename
-                with open(file_path, "wb") as buffer:
-                    buffer.write(file.file.read())
 
-                record = session.query(KnowledgeDocument).filter(KnowledgeDocument.document_id == document_id).first()
-                record.file_path = file_path
-                session.commit()
-            background_tasks.add_task(
-                RAG().extract_content,
-                knowledge_id=knowledge_id,
-                document_id=document_id,
-                title=title,
-                file_type=file.content_type,
-                file_path=file_path,
-            )
+            new_path = _safe_upload_path(document_id, file.filename)
+            try:
+                with open(new_path, "wb") as buffer:
+                    buffer.write(content)
+                with Session() as session:
+                    record = session.query(KnowledgeDocument).filter(
+                        KnowledgeDocument.document_id == document_id
+                    ).first()
+                    record.file_path = new_path
+                    session.commit()
+            except Exception:
+                # 回滚部分成果（文件 + 刚插入的 DB 行），重试才能从干净状态重新开始
+                _rollback_partial_document(document_id, new_path)
+                raise
+            return document_id, new_path
+
+        result = _db_operation_with_retry(_create_document)
+        if result is None:
+            response_msg = "知识库不存在，请提前创建"
             return DocumentResponse(
                 request_id=str(uuid.uuid4()),
-                document_id=document_id,
-                title=title,
-                category=category,
-                file_type=file.content_type,
-                knowledge_id=knowledge_id,
-                response_code=200,
-                response_msg="文档添加成功",
-                process_status="completed",
+                document_id=0,
+                title="",
+                category="",
+                knowledge_id=0,
+                file_type="",
+                response_code=404,
+                response_msg=response_msg,
+                process_status="failed",
                 process_time=time.time() - start_time,
-
             )
-    except Exception as e:
+        document_id, file_path = result
+        background_tasks.add_task(
+            RAG().extract_content,
+            knowledge_id=knowledge_id,
+            document_id=document_id,
+            title=title,
+            file_type=file.content_type,
+            file_path=file_path,
+        )
+        return DocumentResponse(
+            request_id=str(uuid.uuid4()),
+            document_id=document_id,
+            title=title,
+            category=category,
+            file_type=file.content_type,
+            knowledge_id=knowledge_id,
+            response_code=200,
+            response_msg="文档添加成功",
+            process_status="completed",
+            process_time=time.time() - start_time,
+        )
+    except HTTPException:
+        raise  # 参数校验类错误走统一错误信封，不被吞掉
+    except Exception:
         logger.exception("新增文档失败: title=%s", title)
-        pass
     return DocumentResponse(
         request_id=str(uuid.uuid4()),
         document_id=0,
@@ -478,12 +626,10 @@ def add_document(
         category="",
         knowledge_id=0,
         file_type="",
-        response_code=404,
+        response_code=500,
         response_msg=response_msg,
         process_status="failed",
         process_time=time.time() - start_time,
-
-
     )
 
 @app.post("/v1/embedding")

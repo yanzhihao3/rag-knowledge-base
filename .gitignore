@@ -28,6 +28,7 @@ test/.pytest_cache/
 
 # Personal / interview notes
 _md/
+docs/面试讲解稿.md
 
 # OS
 .DS_Store

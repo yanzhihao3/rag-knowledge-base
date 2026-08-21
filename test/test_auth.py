@@ -1,5 +1,6 @@
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -26,6 +27,7 @@ def test_resolve_api_key_config_fallback(monkeypatch):
     assert resolve_api_key({"rag": {"api_key": "cfg-key"}}) == "cfg-key"
 
 
-def test_resolve_api_key_default(monkeypatch):
+def test_resolve_api_key_missing_raises(monkeypatch):
     monkeypatch.delenv("RAG_API_KEY", raising=False)
-    assert resolve_api_key({}) == "rag-dev-key"
+    with pytest.raises(RuntimeError):
+        resolve_api_key({})

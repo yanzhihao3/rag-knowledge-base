@@ -66,7 +66,7 @@ class DocumentResponse(BaseModel):
 
 class RAGRequest(BaseModel):
     knowledge_id: int
-    message: List[Dict]
+    message: List[Dict] = Field(..., min_length=1, description="对话消息列表，至少包含一条消息")
 
 class RAGResponse(BaseModel):
     request_id: str = Field(description="请求ID")

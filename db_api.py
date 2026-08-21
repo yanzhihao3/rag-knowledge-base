@@ -11,9 +11,11 @@ with open("config.yaml", 'r', encoding='utf-8') as file:
 
 db_config = config['database']
 db_type = db_config['engine']
+# 默认不打印 SQL，避免文档标题/路径等敏感数据进日志；调试时可设 SQL_ECHO=1
+SQL_ECHO = os.environ.get("SQL_ECHO", "0") == "1"
 if db_type == 'sqlite':
     db_path = db_config.get('path', 'rag.db')
-    engine = create_engine(f'sqlite:///{db_path}', echo=True)
+    engine = create_engine(f'sqlite:///{db_path}', echo=SQL_ECHO)
 else:
     host = db_config.get('host', 'localhost')
     port = db_config.get('port', 3306)
@@ -23,7 +25,7 @@ else:
 
     engine = create_engine(
         f"{db_type}://{username}:{password}@{host}:{port}/{database}",
-        echo=True
+        echo=SQL_ECHO,
     )
 Base = declarative_base()
 
