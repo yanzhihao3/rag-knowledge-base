@@ -36,7 +36,7 @@ from db_api import (
      Session
 )
 from es_api import delete_document_chunks, delete_knowledge_chunks
-from utils import safe_remove_file
+from utils import safe_remove_file, task_state_machine
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +308,8 @@ def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
             documents = session.query(KnowledgeDocument).filter(
                 KnowledgeDocument.knowledge_id == knowledge_id
             ).all()
+            # id 先快照：commit 后实例过期，读取 document_id 会抛 ObjectDeletedError
+            document_ids = [doc.document_id for doc in documents]
             # 1) ES：按 knowledge_id 一把清（失败抛异常 → 阻断，绝不留幽灵分块）
             delete_knowledge_chunks(knowledge_id)
             # 2) 物理文件：失败只告警
@@ -319,6 +321,12 @@ def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
                 session.delete(doc)
             session.delete(record)
             session.commit()
+            # 4) 清理任务状态：库下所有文档已删，状态行过期，删掉防误报（低危，失败只告警）
+            for document_id in document_ids:
+                try:
+                    task_state_machine.reset(str(document_id))
+                except Exception:
+                    logger.warning("清理任务状态失败，需手动清理: document_id=%s", document_id)
             return KnowledgeResponse(
                 request_id=str(uuid.uuid4()),
                 knowledge_id=knowledge_id,
@@ -504,6 +512,11 @@ def delete_document(document_id: int) -> DocumentResponse:
             # 3) SQLite：删元数据行
             session.delete(record)
             session.commit()
+            # 4) 清理任务状态：文档已删，状态行是过期垃圾，删掉防误报（低危，失败只告警）
+            try:
+                task_state_machine.reset(str(document_id))
+            except Exception:
+                logger.warning("清理任务状态失败，需手动清理: document_id=%d", document_id)
             return DocumentResponse(
                 request_id=str(uuid.uuid4()),
                 document_id=document_id, knowledge_id=knowledge_id,

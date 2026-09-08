@@ -484,7 +484,7 @@ class RAG:
             rerank_idx = np.argsort(rerank_score)[::-1]
 
             sorted_records = [sorted_records[i] for i in rerank_idx]
-            sorted_content = [sorted_content[i] for i in rerank_idx]
+            # sorted_content = [sorted_content[i] for i in rerank_idx]
             debug_chunks = [debug_chunks[i] for i in rerank_idx]
             for i, idx in enumerate(rerank_idx):
                 debug_chunks[i]["rerank_score"] = round(float(rerank_score[idx]), 4)
@@ -492,7 +492,7 @@ class RAG:
         # 最终只保留前 rerank_top_k 条：重排（或 RRF）后的排序已确定，多余的候选
         # 大概率是噪音，塞进 Prompt 只会干扰 LLM，还拉长生成时间。
         sorted_records = sorted_records[:self.rerank_top_k]
-        sorted_content = sorted_content[:self.rerank_top_k]
+        # sorted_content = sorted_content[:self.rerank_top_k]
         debug_chunks = debug_chunks[:self.rerank_top_k]
 
         t4 = time.monotonic()

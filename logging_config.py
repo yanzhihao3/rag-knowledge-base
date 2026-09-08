@@ -3,8 +3,6 @@ import sys
 import contextvars # 上下文变量，用于在异步/多线程中传递数据
 from logging.handlers import RotatingFileHandler
 
-# 为什么用 ContextVar 而不用普通全局变量：
-# 两个用户并发请求时，若 request_id 存全局变量会被互相覆盖，日志串不起来。
 # ContextVar 是"当前执行上下文专属"的变量——每个请求在它自己的上下文里读写，互不干扰。
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
 # 创建一个线程/协程安全的变量，用于存储当前请求的ID
