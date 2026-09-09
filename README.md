@@ -213,6 +213,32 @@ pytest test/benchmark_report.py -v -s -k recall     # 召回率：关键词 / �
 pytest test/benchmark_report.py -v -s -k accuracy   # 回答准确率（需 Ollama）
 ```
 
+## 数据库迁移（Alembic）
+
+表结构由 Alembic 管理（代码不再 import 时自动建表），SQLite 与 MySQL 共用同一套迁移文件。
+
+```bash
+# 1. 新环境 / clone 后第一次启动前，先执行（默认迁本地 SQLite）
+alembic upgrade head
+
+# 2. 用 MySQL 时，先设好环境变量再执行同样命令：
+#    RAG_DB_ENGINE=mysql / RAG_DB_USER=root / RAG_DB_PASSWORD=xxx / RAG_DB_NAME=rag
+#    （PowerShell 里用 $env:RAG_DB_ENGINE='mysql' 的形式设置）
+alembic upgrade head
+
+# 3. 查看当前数据库处于哪个版本
+alembic current
+
+# 4. 修改 db_api.py 的模型后，生成迁移文件并执行
+alembic revision --autogenerate -m "描述这次表结构改动"
+alembic upgrade head
+
+# 5. 回滚最近一次结构变更（后悔药）
+alembic downgrade -1
+```
+
+> 存量库首次接入 Alembic 时用 `alembic stamp head` 打版本标签，不要对已有数据的库直接 upgrade。
+
 ## 项目亮点
 
 1. **双路并行召回**：BM25 + KNN 通过 ThreadPoolExecutor 并行执行，降低检索延迟

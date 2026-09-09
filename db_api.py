@@ -86,7 +86,6 @@ class KnowledgeDocument(Base):
 
     knowledge = relationship("KnowledgeDatabase", back_populates="documents")
 
-# 当前阶段仍用 create_all 自动建表（SQLite/MySQL 首次运行都能用）；
-# 企业级下一步会换成 Alembic 迁移，让表结构变更可版本管理、可回滚。
-Base.metadata.create_all(engine)
+# 表结构交给 Alembic 管理：新环境启动前先执行 `alembic upgrade head`。
+# 这里不再 import 时自动建表，避免“代码改了模型、库却没跟着变”的问题。
 Session = sessionmaker(bind=engine)
