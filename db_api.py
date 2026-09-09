@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, timezone
 import yaml
@@ -9,31 +10,54 @@ import os
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
+def _cfg(db_config, key, env_name, default=None, cast=None):
+    """配置取值：环境变量优先（容器/云端/上线时用），其次才是 config.yaml。"""
+    value = os.environ.get(env_name)
+    if value is None:
+        value = db_config.get(key, default)
+    if value is not None and cast is not None:
+        value = cast(value)
+    return value
+
+
 db_config = config['database']
-db_type = db_config['engine']
+# 引擎选择：默认 sqlite（本地开发、rag.db 原样保留），
+# 可通过环境变量 RAG_DB_ENGINE=mysql 或 config.yaml 切换
+db_type = _cfg(db_config, 'engine', 'RAG_DB_ENGINE', 'sqlite')
 # 默认不打印 SQL，避免文档标题/路径等敏感数据进日志；调试时可设 SQL_ECHO=1
 SQL_ECHO = os.environ.get("SQL_ECHO", "0") == "1"
-if db_type == 'sqlite':
-    db_path = db_config.get('path', 'rag.db')
-    engine = create_engine(f'sqlite:///{db_path}', echo=SQL_ECHO)
-else:
-    host = db_config.get('host', 'localhost')
-    port = db_config.get('port', 3306)
-    username = db_config.get('username', 'user')
-    password = db_config.get('password', 'password')
-    database = db_config.get('database', 'mydb')
 
+if db_type == 'sqlite':
+    # SQLite 分支保持原样：本地开发默认，rag.db 文件不动
+    db_path = _cfg(db_config, 'path', 'RAG_DB_PATH', 'rag.db')
+    engine = create_engine(f'sqlite:///{db_path}', echo=SQL_ECHO)
+elif db_type in ('mysql', 'mysql+pymysql'):
+    # MySQL 分支：URL.create 负责安全编码（密码里含 @ / # 也不会拼坏连接串）
     engine = create_engine(
-        f"{db_type}://{username}:{password}@{host}:{port}/{database}",
+        URL.create(
+            drivername="mysql+pymysql",                  # 驱动：pymysql
+            username=_cfg(db_config, 'username', 'RAG_DB_USER', 'rag'),
+            password=_cfg(db_config, 'password', 'RAG_DB_PASSWORD', ''),
+            host=_cfg(db_config, 'host', 'RAG_DB_HOST', 'localhost'),
+            port=_cfg(db_config, 'port', 'RAG_DB_PORT', 3306, int),
+            database=_cfg(db_config, 'database', 'RAG_DB_NAME', 'rag'),
+            query={'charset': 'utf8mb4'},                # 完整中文支持
+        ),
         echo=SQL_ECHO,
+        pool_pre_ping=True,                              # 取连接前探活，避免拿到死连接
+        pool_recycle=3600,                               # 1小时回收，避开 MySQL wait_timeout
+        pool_size=int(os.environ.get('RAG_DB_POOL_SIZE', '5')),
+        max_overflow=int(os.environ.get('RAG_DB_MAX_OVERFLOW', '10')),
     )
+else:
+    raise ValueError(f"不支持的数据库引擎: {db_type}，可选 sqlite / mysql")
 Base = declarative_base()
 
 class KnowledgeDatabase(Base):
     __tablename__ = 'knowledge_database'
     knowledge_id = Column(Integer, primary_key=True, autoincrement=True)
-    title = Column(String)
-    category = Column(String)
+    title = Column(String(255))
+    category = Column(String(100))
     owner_id = Column(Integer, default=0)
     department_id = Column(Integer, default=0)
     create_dt = Column(DateTime, default=datetime.now)
@@ -50,17 +74,19 @@ class KnowledgeDocument(Base):
     __tablename__ = 'knowledge_document'
 
     document_id = Column(Integer, primary_key=True, autoincrement=True)
-    title = Column(String)
-    category = Column(String)
-    knowledge_id = Column(Integer, ForeignKey('knowledge_database.knowledge_id'))
+    title = Column(String(255))
+    category = Column(String(100))
+    knowledge_id = Column(Integer, ForeignKey('knowledge_database.knowledge_id'), index=True)
     owner_id = Column(Integer, default=0)
     department_id = Column(Integer, default=0)
-    file_path = Column(String)
-    file_type = Column(String)
+    file_path = Column(String(500))
+    file_type = Column(String(50))
     create_dt = Column(DateTime, default=datetime.now)
     update_dt = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     knowledge = relationship("KnowledgeDatabase", back_populates="documents")
 
+# 当前阶段仍用 create_all 自动建表（SQLite/MySQL 首次运行都能用）；
+# 企业级下一步会换成 Alembic 迁移，让表结构变更可版本管理、可回滚。
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)

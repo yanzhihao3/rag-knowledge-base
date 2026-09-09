@@ -6,11 +6,13 @@ elasticsearch:
   password: ""
 
 database:
-  engine: "sqlite"
-  path: "rag.db"
-  host: "localhost"
-  username: ""
-  password: ""
+  engine: "sqlite"        # Docker 默认沿用 sqlite；上线切 MySQL 时改为 "mysql"
+  path: "rag.db"          # 仅 engine=sqlite 时使用
+  host: "mysql"           # 仅 engine=mysql 时使用（compose 服务名）
+  port: 3306
+  username: "rag"
+  password: ""            # 生产环境用环境变量 RAG_DB_PASSWORD 注入
+  database: "rag"
 
 models:
   embedding_model:

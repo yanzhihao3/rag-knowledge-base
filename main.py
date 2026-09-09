@@ -33,7 +33,7 @@ setup_logging()
 from rag_api import RAG
 from db_api import (
      KnowledgeDocument, KnowledgeDatabase,
-     Session
+     Session, db_type
 )
 from es_api import delete_document_chunks, delete_knowledge_chunks
 from utils import safe_remove_file, task_state_machine
@@ -43,11 +43,28 @@ logger = logging.getLogger(__name__)
 #project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #config_path = os.path.join(project_root, 'config.yaml')
 
-# 只有数据库层的暂时性错误（如 SQLite 写锁 "database is locked"）才值得重试；
-# 业务/参数/逻辑错误重试没有意义，直接抛出。
-_RETRYABLE_DB_ERRORS = (sqlite3.OperationalError, SQLAlchemyOperationalError)
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 0.2
+# MySQL 值得重试的错误码：1213 死锁、1205 锁等待超时
+_MYSQL_RETRYABLE_ERRCODES = {1205, 1213}
+
+
+def _is_retryable_db_error(exc: BaseException) -> bool:
+    """按数据库引擎判断错误是否值得重试。
+
+    - SQLite：写锁 "database is locked" 等暂时性错误值得重试；
+    - MySQL：只重试死锁(1213)/锁等待超时(1205)，
+      业务/参数/逻辑错误重试没有意义，直接抛出。
+    """
+    if isinstance(exc, sqlite3.OperationalError):
+        return db_type == 'sqlite'
+    if not isinstance(exc, SQLAlchemyOperationalError):
+        return False
+    if db_type in ('mysql', 'mysql+pymysql'):
+        orig = getattr(exc, 'orig', None)
+        code = getattr(orig, 'args', [None])[0] if orig is not None else None
+        return code in _MYSQL_RETRYABLE_ERRCODES
+    return True
 
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
 _UPLOAD_DIR = "upload_files"
@@ -59,7 +76,9 @@ def _db_operation_with_retry(fn, *args, **kwargs):
     for attempt in range(_RETRY_ATTEMPTS):
         try:
             return fn(*args, **kwargs)
-        except _RETRYABLE_DB_ERRORS as exc:
+        except Exception as exc:
+            if not _is_retryable_db_error(exc):
+                raise
             last_exc = exc
             if attempt < _RETRY_ATTEMPTS - 1:
                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
@@ -724,7 +743,6 @@ def health_check():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=config["rag"]["port"], workers=1)
-
 
 
 
