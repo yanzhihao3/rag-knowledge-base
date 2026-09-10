@@ -39,7 +39,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7
     container_name: rag-redis
     # 开启 AOF 持久化：Redis 重启后队列不丢
     command: ["redis-server", "--appendonly", "yes"]

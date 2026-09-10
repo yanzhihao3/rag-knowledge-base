@@ -60,7 +60,7 @@ alembic upgrade head
 python scripts/create_user.py --username admin --password 'Admin@12345' --role admin --department-id 1
 
 # 5. 启动 Redis（异步任务队列的 broker）
-docker run -d --name rag-redis -p 6379:6379 -v rag_redis_data:/data redis:7-alpine redis-server --appendonly yes
+docker run -d --name rag-redis -p 6379:6379 -v rag_redis_data:/data redis:7 redis-server --appendonly yes
 
 # 6. 启动后端
 python main.py
