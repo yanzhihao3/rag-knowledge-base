@@ -37,6 +37,3 @@ docs/面试讲解稿.md
 .DS_Store
 Thumbs.db
 
-# Frontend
-frontend/node_modules/
-frontend/dist/

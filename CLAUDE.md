@@ -4,11 +4,9 @@
 
 基于 RAG（检索增强生成）的知识库智能问答系统，支持 PDF 文档上传、自然语言提问、多轮对话。
 
-**技术栈**：FastAPI / Elasticsearch / SQLite / Ollama / SBert / BM25 / pdfplumber
+**技术栈**：FastAPI / Elasticsearch / MySQL（默认，可切 SQLite）/ Ollama / SBert / BM25 / pdfplumber
 
 **观测**：Python 标准库 `logging` + `request_id` 关联 + 检索链路耗时拆分 + 敏感内容脱敏
-
-**前端**：Vue 3 / Element Plus / Axios / Vite
 
 **运行**：Ollama 本地运行 LLM（默认 `qwen2.5:1.5b`），服务端口 6010。
 
@@ -18,23 +16,14 @@
 .
 ├── main.py              # FastAPI 入口，REST API 端点
 ├── rag_api.py           # RAG 核心逻辑：检索、召回、重排、多轮对话
-├── db_api.py            # SQLite 操作：知识库、文档元数据
+├── db_api.py            # 数据库层：MySQL（默认）/ SQLite 双引擎
 ├── es_api.py            # Elasticsearch 操作：向量索引、全文检索、级联删除
 ├── logging_config.py    # 日志底座：统一格式 + request_id 注入 + 轮转文件
 ├── router_schemas.py    # API 请求/响应数据结构
+├── alembic/             # 数据库迁移（表结构版本管理）
+├── scripts/             # 运维脚本（如 SQLite → MySQL 数据搬迁）
 ├── config.yaml          # 配置：ES、数据库、模型路径、LLM
 ├── upload_files/        # 上传的 PDF 文件
-├── rag.db               # SQLite 数据库
-├── frontend/            # Vue 3 前端
-│   ├── src/
-│   │   ├── App.vue          # 根组件（布局）
-│   │   ├── api.js           # Axios API 封装
-│   │   ├── components/
-│   │   │   ├── Sidebar.vue  # 侧边栏（知识库+文档管理）
-│   │   │   └── ChatView.vue # 聊天界面
-│   │   └── main.js          # 入口
-│   ├── vite.config.js
-│   └── package.json
 ├── test/                # 单元测试
 │   ├── benchmark_report.py         # RAG 评测脚本（召回率 / 准确率）
 │   └── benchmark_cases_rag_book.py # 评测用例（50 条，三档难度）
@@ -92,11 +81,11 @@ rag:
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/v1/knowledge_base` | 查询知识库（SQLite） |
+| GET | `/v1/knowledge_base` | 查询知识库（数据库） |
 | GET | `/v1/knowledge_base/list` | 知识库列表 |
-| POST | `/v1/knowledge_base` | 创建知识库（SQLite） |
+| POST | `/v1/knowledge_base` | 创建知识库（数据库） |
 | DELETE | `/v1/knowledge_base` | 删除知识库（级联清空库下 ES 分块/摘要 + PDF + 子文档） |
-| GET | `/v1/document` | 查询文档（SQLite） |
+| GET | `/v1/document` | 查询文档（数据库） |
 | GET | `/v1/document/list` | 文档列表（按知识库） |
 | POST | `/v1/document` | 上传 PDF（异步解析） |
 | DELETE | `/v1/document` | 删除文档（级联清理 ES 分块/摘要 + PDF） |
@@ -111,23 +100,23 @@ rag:
 3. **向量化** → BGE 生成 512 维向量，写入 ES
 4. **检索时** → Query 改写（规则触发，结合最近 2 轮历史理解指代）→ BM25 + KNN **双路并行召回** → RRF 融合取前 10 条 → Cross-Encoder 重排 → **只保留前 5 条（rerank_top_k）进 Prompt**；四段耗时（改写/向量/召回/重排）单独打点记录日志
 5. **生成** → 检索结果注入 Prompt → 调用 Ollama LLM
-6. **结果可视化** → `/chat` 返回 `debug_info`（改写后 query、召回chunks、RRF/重排分数），前端折叠面板展示
+6. **结果可视化** → `/chat` 返回 `debug_info`（改写后 query、召回chunks、RRF/重排分数），可在 Swagger `/docs` 或任意客户端查看
 
 ## 数据存储架构
 
 | 存储 | 用途 |
 |------|------|
-| SQLite | 知识库、文档元数据的 CRUD |
+| MySQL（默认）/ SQLite | 知识库、文档元数据的 CRUD |
 | ES chunk_info | 文档块文本、全文索引、向量索引 |
 | ES document_meta | 文档摘要、文件名等元数据 |
 
 ## 数据一致性（级联删除）
 
-三存储（SQLite 元数据 / ES 分块与摘要 / 磁盘 PDF）**没有事务边界**，删除在代码里做级联清理，顺序钉死为 **ES → 物理文件 → SQLite**：
+三存储（MySQL 元数据 / ES 分块与摘要 / 磁盘 PDF）**没有事务边界**，删除在代码里做级联清理，顺序钉死为 **ES → 物理文件 → 数据库**：
 
-- **ES 先删，失败阻断**：删了元数据却留分块 = 还能搜到已删内容（幽灵分块），危害最大。ES 清理失败抛异常 → 接口 500 → SQLite 不删。
+- **ES 先删，失败阻断**：删了元数据却留分块 = 还能搜到已删内容（幽灵分块），危害最大。ES 清理失败抛异常 → 接口 500 → 数据库不删。
 - **物理文件次删，失败只告警**：孤儿文件低危、可手动清理，不该被文件锁阻塞整个删除。
-- **SQLite 最后删，同一事务**：删文档删一行；删知识库先删子文档行、再删知识库行。
+- **数据库最后删，同一事务**：删文档删一行；删知识库先删子文档行、再删知识库行。
 - 删文档按 `document_id` 精确删；删知识库按 `knowledge_id` 一把清，不误删其他库。
 - `delete_by_query` 显式检查 `version_conflicts`/`failures`，部分删除失败会抛 `RuntimeError`。
 - 响应字段在 `commit` 前快照，避免 `ObjectDeletedError`；pdfplumber 解析用 try/finally 关闭，防 Windows 文件锁删不掉 PDF。

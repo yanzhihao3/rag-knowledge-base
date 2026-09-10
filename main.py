@@ -14,7 +14,6 @@ from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from typing_extensions import Annotated
 from typing import List, Dict
 from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException, Security
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from router_schemas import (
      EmbeddingRequest, EmbeddingResponse,
@@ -208,15 +207,6 @@ async def log_requests(request: Request, call_next):
         logger.info("%s %s -> %d | %.3fs", request.method, request.url.path, status, duration)
         request_id_var.reset(token)
 
-
-# CORS：允许前端跨域访问
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/v1/knowledge_base")
 def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
@@ -743,6 +733,5 @@ def health_check():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=config["rag"]["port"], workers=1)
-
 
 
