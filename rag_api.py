@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 from es_api import es, delete_document_chunks
 import os
 from concurrent.futures import ThreadPoolExecutor
-from utils import with_retry, TaskStateMachine, task_state_machine
+from utils import with_retry
 import logging
 
 logger = logging.getLogger(__name__)
@@ -314,25 +314,19 @@ class RAG:
     @with_retry(max_retries=3, base_delay=2)
     def extract_content(self, knowledge_id, document_id, title, file_type, file_path,
                         owner_id: int = 0, department_id: int = 0):
-        doc_id_str = str(document_id)
-        task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_PROCESSING)
-
         # 类型白名单：只处理明确支持的 PDF；Word/未知类型直接置为失败，
         # 绝不静默“成功”（以前 Word 走到 pass 后照样上报 completed）。
         # 判断依据优先看服务端可控的文件扩展名，不轻信客户端自报的 content_type。
         is_pdf = ("pdf" in (file_type or "")) or str(file_path or "").lower().endswith(".pdf")
         if not is_pdf:
-            task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_FAILED)
             logger.warning("不支持的文件类型，文档解析失败: document_id=%s file_type=%s", document_id, file_type)
             return
 
         try:
             self._extract_pdf_content(knowledge_id, document_id, title, file_path,
                                       owner_id=owner_id, department_id=department_id)
-            task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_COMPLETED)
             logger.info("文档提取完成 document_id=%s file_type=%s path=%s", document_id, file_type, file_path)
         except Exception as e:
-            task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_FAILED)
             raise e
 
 # {

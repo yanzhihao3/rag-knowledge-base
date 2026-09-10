@@ -156,7 +156,7 @@ pytest test/ -v
 - `test_query_rewrite.py` — Query 改写测试
 - `test_permission.py` — 权限测试
 - `test_retry.py` — 重试逻辑测试
-- `test_state_machine.py` — 状态机测试
+- `test_task_store.py` — 任务状态存储测试（task 表状态流转）
 - `test_pdf_processing.py` — PDF 解析测试
 - `test_logging.py` — 日志底座测试（CI 可跑）
 - `test_utils.py` — 工具函数测试（`safe_remove_file` 等）
