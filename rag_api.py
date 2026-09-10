@@ -1,6 +1,6 @@
 import yaml
 import re
-from typing import Union, List, Any, Dict
+from typing import Union, List, Any, Dict, Optional
 import numpy as np
 import datetime
 import time
@@ -194,7 +194,8 @@ class RAG:
         )
         self.llm_model = config["rag"]["llm_model"]
 
-    def _extract_pdf_content(self, knowledge_id, document_id, title, file_path) -> bool:
+    def _extract_pdf_content(self, knowledge_id, document_id, title, file_path,
+                             owner_id: int = 0, department_id: int = 0) -> bool:
         try:
             pdf = pdfplumber.open(file_path)
         except Exception:
@@ -251,8 +252,8 @@ class RAG:
                 page_data = {
                     "document_id": document_id,
                     "knowledge_id": knowledge_id,
-                    "owner_id": 0,
-                    "department_id": 0,
+                    "owner_id": owner_id,
+                    "department_id": department_id,
                     "page_number": page_number,
                     "chunk_id": 0,
                     "chunk_content": current_page_text,
@@ -273,8 +274,8 @@ class RAG:
                     page_data = {
                         "document_id": document_id,
                         "knowledge_id": knowledge_id,
-                        "owner_id": 0,
-                        "department_id": 0,
+                        "owner_id": owner_id,
+                        "department_id": department_id,
                         "page_number": page_number,
                         "chunk_id": chunk_idx,
                         "chunk_content": page_chunks[chunk_idx - 1],
@@ -292,8 +293,8 @@ class RAG:
             document_data = {
                 "document_id": document_id,
                 "knowledge_id": knowledge_id,
-                "owner_id": 0,
-                "department_id": 0,
+                "owner_id": owner_id,
+                "department_id": department_id,
                 "document_name": title,
                 "file_path": file_path,
                 "abstract": abstract,
@@ -311,7 +312,8 @@ class RAG:
         pass
 
     @with_retry(max_retries=3, base_delay=2)
-    def extract_content(self, knowledge_id, document_id, title, file_type, file_path):
+    def extract_content(self, knowledge_id, document_id, title, file_type, file_path,
+                        owner_id: int = 0, department_id: int = 0):
         doc_id_str = str(document_id)
         task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_PROCESSING)
 
@@ -325,7 +327,8 @@ class RAG:
             return
 
         try:
-            self._extract_pdf_content(knowledge_id, document_id, title, file_path)
+            self._extract_pdf_content(knowledge_id, document_id, title, file_path,
+                                      owner_id=owner_id, department_id=department_id)
             task_state_machine.set_state(doc_id_str, TaskStateMachine.STATE_COMPLETED)
             logger.info("文档提取完成 document_id=%s file_type=%s path=%s", document_id, file_type, file_path)
         except Exception as e:
@@ -373,16 +376,18 @@ class RAG:
                 return scores
         raise NotImplemented
 
-    def _word_search(self, rewritten_query, knowledge_id):
+    def _word_search(self, rewritten_query, knowledge_id, department_id: Optional[int] = None):
         """第一路：关键词检索"""
+        filters = [{"term": {"knowledge_id": knowledge_id}}]
+        if department_id is not None:
+            # 租户隔离：只召回本部门的分块（admin/system 传 None 表示不限制）
+            filters.append({"term": {"department_id": department_id}})
         return es.search(index="chunk_info",
                          body={
                              "query": {
                                  "bool": {
                                      "must": [{"match": {"chunk_content": rewritten_query}}],
-                                     "filter": [
-                                         {"term": {"knowledge_id": knowledge_id}},
-                                     ]
+                                     "filter": filters,
                                  }
                              },
                              "size": 50
@@ -390,8 +395,11 @@ class RAG:
                          fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content", "chunk_tables"],
                          source=False)
 
-    def _vector_search(self, embedding_vector, knowledge_id):
+    def _vector_search(self, embedding_vector, knowledge_id, department_id: Optional[int] = None):
         """第二路：向量检索"""
+        filters = [{"term": {"knowledge_id": knowledge_id}}]
+        if department_id is not None:
+            filters.append({"term": {"department_id": department_id}})
         knn_query = {
             "field": "embedding_vector",
             "query_vector": [float(x) for x in list(embedding_vector)],
@@ -399,9 +407,7 @@ class RAG:
             "num_candidates": 100,
             "filter": {
                 "bool": {
-                    "must": [
-                        {"term": {"knowledge_id": knowledge_id}},
-                    ]
+                    "must": filters
                 }
             }
         }
@@ -409,7 +415,8 @@ class RAG:
                          fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content", "chunk_tables"],
                          source=False)
 
-    def query_document(self, query: str, knowledge_id: int, history: List[Dict] = None) -> List[str]:
+    def query_document(self, query: str, knowledge_id: int, history: List[Dict] = None,
+                       department_id: Optional[int] = None) -> List[str]:
         # Query改写：消除指代词，完整表达（传入历史帮助理解指代）
         t0 = time.monotonic()
         rewritten_query = self.query_rewrite(query, history)
@@ -421,8 +428,8 @@ class RAG:
 
         # 双路并行召回
         with ThreadPoolExecutor(max_workers=2) as executor:
-            word_future = executor.submit(self._word_search, rewritten_query, knowledge_id)
-            vector_future = executor.submit(self._vector_search, embedding_vector, knowledge_id)
+            word_future = executor.submit(self._word_search, rewritten_query, knowledge_id, department_id)
+            vector_future = executor.submit(self._vector_search, embedding_vector, knowledge_id, department_id)
             word_search_response = word_future.result()
             vector_search_response = vector_future.result()
         # ===== RRF融合 =====
@@ -504,7 +511,8 @@ class RAG:
         self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
         return sorted_records
 
-    def _retrieve_context(self, knowledge_id: int, message: List[Dict]):
+    def _retrieve_context(self, knowledge_id: int, message: List[Dict],
+                          department_id: Optional[int] = None):
         """检索 + 组装 LLM 消息，返回 (llm_messages, debug_info)。
 
         单轮: llm_messages = [system(资料+问题)]
@@ -519,7 +527,7 @@ class RAG:
             history = message[:-1]  # 传入历史帮助 query_rewrite 理解指代
             logger.info("[chat] 历史 %d 条", len(history))
 
-        related_records = self.query_document(query, knowledge_id, history)
+        related_records = self.query_document(query, knowledge_id, history, department_id=department_id)
         debug_info = getattr(self, '_last_debug_info', None) or {}
         logger.info("[RAG] 检索到 %d 条记录", len(related_records))
         related_document = _format_related_document(related_records)
@@ -536,9 +544,9 @@ class RAG:
             llm_messages = message[:-1] + [rag_context_message, message[-1]]
         return llm_messages, debug_info
 
-    def chat_with_rag(self, knowledge_id: int, message: List[Dict]):
+    def chat_with_rag(self, knowledge_id: int, message: List[Dict], department_id: Optional[int] = None):
         """非流式对话（保留，供 benchmark 直接调用）。"""
-        llm_messages, debug_info = self._retrieve_context(knowledge_id, message)
+        llm_messages, debug_info = self._retrieve_context(knowledge_id, message, department_id=department_id)
         rag_response = self.chat(llm_messages, 0.7, 0.9).content
         message.append({"role": "system", "content": rag_response})
         return message, debug_info
@@ -569,9 +577,9 @@ class RAG:
         message.append({"role": "system", "content": full_response})
         yield ("done", {"message": message})
 
-    def chat_stream(self, knowledge_id: int, message: List[Dict]):
+    def chat_stream(self, knowledge_id: int, message: List[Dict], department_id: Optional[int] = None):
         """流式对话入口，yield (event, data)：debug / token / error / done。"""
-        llm_messages, debug_info = self._retrieve_context(knowledge_id, message)
+        llm_messages, debug_info = self._retrieve_context(knowledge_id, message, department_id=department_id)
         yield ("debug", debug_info)
         yield from self._stream_tokens(llm_messages, message)
 

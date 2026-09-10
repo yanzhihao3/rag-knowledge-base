@@ -30,8 +30,32 @@ class RerankResponse(BaseModel):
 class KnowledgeRequest(BaseModel):
     category: str
     title: str
-    owner_id: int = 0
-    department_id: int = 0
+    # owner_id / department_id 由服务端从当前登录用户写入，不接受客户端指定（防越权）
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6, max_length=72, description="最长 72 字节（bcrypt 限制）")
+    role: str = Field(default="viewer", description="admin / editor / viewer")
+    department_id: int = Field(default=0, ge=0)
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(description="access token 有效期（秒）")
+
+
+class UserResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+    department_id: int
 
 class KnowledgeResponse(BaseModel):
     request_id: str = Field(description="请求ID")

@@ -1,7 +1,8 @@
 import os
 
 # 无需鉴权的路径 使用集合的好处是查找时间复杂度为O(1)，高效判断路径是否公开。
-PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+# 无需认证的路径：探活、文档、登录（登录本身不能要求先登录）
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/v1/auth/login"}
 
 
 def resolve_api_key(config: dict) -> str:

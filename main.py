@@ -1,7 +1,6 @@
 import yaml
 import os
 import re
-import secrets
 import sqlite3
 import time
 import json
@@ -12,8 +11,8 @@ import logging
 import uvicorn
 from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from typing_extensions import Annotated
-from typing import List, Dict
-from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException, Security
+from typing import List, Dict, Optional
+from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException
 from pydantic import BaseModel
 from router_schemas import (
      EmbeddingRequest, EmbeddingResponse,
@@ -24,8 +23,8 @@ from router_schemas import (
 )
 from logging_config import setup_logging, request_id_var
 from fastapi.responses import JSONResponse, StreamingResponse
-from auth import is_public_path, resolve_api_key
-from fastapi.security import APIKeyHeader
+from auth_routes import router as auth_router
+from security import Principal, require_permission, tenant_conditions
 
 setup_logging()
 
@@ -141,23 +140,7 @@ def _rollback_partial_document(document_id: int, file_path: str) -> None:
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
-API_KEY = resolve_api_key(config)
-
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-
-def verify_api_key(request: Request, provided: str = Security(api_key_header)):
-    if is_public_path(request.url.path):
-        return
-    if provided is None:
-        raise HTTPException(status_code=401, detail="missing API key")
-    # 恒定时间比较，避免通过响应耗时猜测 key（时序攻击）
-    if not secrets.compare_digest(provided, API_KEY):
-        raise HTTPException(status_code=403, detail="invalid API key")
-
-
 app = FastAPI(
-    dependencies=[Depends(verify_api_key)],
     swagger_ui_parameters={
         # 替换成国内较快的 unpkg 镜像源
         "swagger_js_url": "https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
@@ -166,6 +149,9 @@ app = FastAPI(
         "swagger_favicon_url": "https://fastapi.tiangolo.com/img/favicon.png",
     }
 )
+
+# 认证路由（/v1/auth/login 等）无需全局鉴权，各端点自行声明所需权限
+app.include_router(auth_router)
 
 
 @app.exception_handler(HTTPException)
@@ -181,13 +167,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         },
     )
 
-# 配置层让日志系统统一就位,拦截层给每个请求发身份证并记录总耗时与成败,业务层在 8 个端点出错时记录带堆栈的具体失败。三者配合:一次请求进来 → 有 id
-# 贯穿、有总耗时、出错了有明细堆栈。
-# 鉴权改走 FastAPI 依赖注入（verify_api_key），Swagger UI 会出现 Authorize 按钮，能直接发 X-API-Key 头。
-# 请求进来 → CORS 处理跨域 → log_requests 打日志 → 依赖层校验 API-Key → 业务代码
-# 依赖抛 HTTPException → 统一错误信封；log_requests 在中间件层，依然能记到 401/403。
-# Security(api_key_header) = 「这是安全凭据」——FastAPI 会额外把它登记进 OpenAPI 的 securitySchemes，
-# Swagger 读到后渲染成右上角 Authorize 按钮，你填一次，之后每个请求自动带上X-API-Key 头。
+# 日志链路：log_requests 中间件为每个请求发 request_id、记录总耗时与成败；
+# 业务层出错时用 logger.exception 保留堆栈，统一错误信封由 HTTPException 处理器输出。
+# 鉴权链路：各业务端点通过 Depends(require_permission(...)) 做认证 + 授权，
+# OAuth2PasswordBearer 会让 Swagger UI 出现 Authorize 按钮（支持账密登录换 token，也兼容 X-API-Key）。
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -209,13 +192,16 @@ async def log_requests(request: Request, call_next):
 
 
 @app.get("/v1/knowledge_base")
-def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
+def get_knowledge_base(knowledge_id: int,
+                       principal: Principal = Depends(require_permission("kb:read"))) -> KnowledgeResponse:
     start_time = time.time()
     try:
         def _query():
             with Session() as session:
                 return session.query(KnowledgeDatabase).filter(
-                    KnowledgeDatabase.knowledge_id == knowledge_id
+                    KnowledgeDatabase.knowledge_id == knowledge_id,
+                    # 租户隔离：非 admin 只能查本部门（越权访问与"不存在"同样返回 404）
+                    *tenant_conditions(KnowledgeDatabase, principal),
                 ).first()
 
         record = _db_operation_with_retry(_query)
@@ -260,11 +246,13 @@ def get_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
     )
 
 @app.get("/v1/knowledge_base/list")
-def list_knowledge_base():
+def list_knowledge_base(principal: Principal = Depends(require_permission("kb:read"))):
     start_time = time.time()
     try:
         with Session() as session:
-            records = session.query(KnowledgeDatabase).all()
+            records = session.query(KnowledgeDatabase).filter(
+                *tenant_conditions(KnowledgeDatabase, principal)
+            ).all()
             return {
                 "request_id": str(uuid.uuid4()),
                 "knowledge_list": [
@@ -292,12 +280,14 @@ def list_knowledge_base():
         }
 
 @app.delete("/v1/knowledge_base")
-def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
+def delete_knowledge_base(knowledge_id: int,
+                          principal: Principal = Depends(require_permission("kb:delete"))) -> KnowledgeResponse:
     start_time = time.time()
     try:
         with Session() as session:
             record = session.query(KnowledgeDatabase).filter(
-                KnowledgeDatabase.knowledge_id == knowledge_id
+                KnowledgeDatabase.knowledge_id == knowledge_id,
+                *tenant_conditions(KnowledgeDatabase, principal),
             ).first()
             if record is None:
                 return KnowledgeResponse(
@@ -357,16 +347,20 @@ def delete_knowledge_base(knowledge_id: int) -> KnowledgeResponse:
     )
 
 @app.post("/v1/knowledge_base")
-def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
+def add_knowledge_base(req: KnowledgeRequest,
+                       principal: Principal = Depends(require_permission("kb:write"))) -> KnowledgeResponse:
     start_time = time.time()
+    # 归属由服务端决定：请求体里传的 owner/department 一律忽略，防止越权写入
+    owner_id = principal.user_id or 0
+    department_id = principal.department_id or 0
     try:
         def _insert():
             with Session() as session:
                 record = KnowledgeDatabase(
                     title=req.title,
                     category=req.category,
-                    owner_id=req.owner_id,
-                    department_id=req.department_id,
+                    owner_id=owner_id,
+                    department_id=department_id,
                     create_dt=datetime.datetime.now(),
                     update_dt=datetime.datetime.now(),
                 )
@@ -382,8 +376,8 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
             knowledge_id=knowledge_id,
             title=req.title,
             category=req.category,
-            owner_id=req.owner_id,
-            department_id=req.department_id,
+            owner_id=owner_id,
+            department_id=department_id,
             response_code=200,
             response_msg="知识库插入成功",
             process_status="completed",
@@ -406,13 +400,15 @@ def add_knowledge_base(req: KnowledgeRequest) -> KnowledgeResponse:
     )
 
 @app.get("/v1/document")
-def get_document(document_id: int) -> DocumentResponse:
+def get_document(document_id: int,
+                 principal: Principal = Depends(require_permission("doc:read"))) -> DocumentResponse:
     start_time = time.time()
     try:
         def _query():
             with Session() as session:
                 return session.query(KnowledgeDocument).filter(
-                    KnowledgeDocument.document_id == document_id
+                    KnowledgeDocument.document_id == document_id,
+                    *tenant_conditions(KnowledgeDocument, principal),
                 ).first()
 
         record = _db_operation_with_retry(_query)
@@ -458,12 +454,14 @@ def get_document(document_id: int) -> DocumentResponse:
     )
 
 @app.get("/v1/document/list")
-def list_document(knowledge_id: int):
+def list_document(knowledge_id: int,
+                  principal: Principal = Depends(require_permission("doc:read"))):
     start_time = time.time()
     try:
         with Session() as session:
             records = session.query(KnowledgeDocument).filter(
-                KnowledgeDocument.knowledge_id == knowledge_id
+                KnowledgeDocument.knowledge_id == knowledge_id,
+                *tenant_conditions(KnowledgeDocument, principal),
             ).all()
             return {
                 "request_id": str(uuid.uuid4()),
@@ -494,12 +492,14 @@ def list_document(knowledge_id: int):
         }
 
 @app.delete("/v1/document")
-def delete_document(document_id: int) -> DocumentResponse:
+def delete_document(document_id: int,
+                    principal: Principal = Depends(require_permission("doc:delete"))) -> DocumentResponse:
     start_time = time.time()
     try:
         with Session() as session:
             record = session.query(KnowledgeDocument).filter(
-                KnowledgeDocument.document_id == document_id
+                KnowledgeDocument.document_id == document_id,
+                *tenant_conditions(KnowledgeDocument, principal),
             ).first()
             if record is None:
                 return DocumentResponse(
@@ -552,9 +552,13 @@ def add_document(
         category: str = Form(),
         file: UploadFile = File(...),
         background_tasks: BackgroundTasks = None,
+        principal: Principal = Depends(require_permission("doc:write")),
 ) -> DocumentResponse:
     start_time = time.time()
     response_msg = "新增文档失败"
+    # 文档归属跟随当前用户；部门字段只在服务端写入
+    owner_id = principal.user_id or 0
+    department_id = principal.department_id or 0
     try:
         # 上传文件名先校验：拒绝路径穿越、非法字符和不支持的扩展名（尽早拦截，不留脏数据）
         _validate_upload_filename(file.filename)
@@ -566,7 +570,9 @@ def add_document(
         def _create_document():
             with Session() as session:
                 kb = session.query(KnowledgeDatabase).filter(
-                    KnowledgeDatabase.knowledge_id == knowledge_id
+                    KnowledgeDatabase.knowledge_id == knowledge_id,
+                    # 只能往自己部门的知识库里传文档
+                    *tenant_conditions(KnowledgeDatabase, principal),
                 ).first()
                 if kb is None:
                     return None
@@ -574,6 +580,8 @@ def add_document(
                     title=title,
                     category=category,
                     knowledge_id=knowledge_id,
+                    owner_id=owner_id,
+                    department_id=department_id,
                     file_path="",
                     file_type=file.content_type,
                     create_dt=datetime.datetime.now(),
@@ -624,6 +632,8 @@ def add_document(
             title=title,
             file_type=file.content_type,
             file_path=file_path,
+            owner_id=owner_id,
+            department_id=department_id,
         )
         return DocumentResponse(
             request_id=str(uuid.uuid4()),
@@ -655,7 +665,8 @@ def add_document(
     )
 
 @app.post("/v1/embedding")
-async def semantic_embedding(req: EmbeddingRequest) -> EmbeddingResponse:
+async def semantic_embedding(req: EmbeddingRequest,
+                             _principal: Principal = Depends(require_permission("ai:use"))) -> EmbeddingResponse:
     start_time = time.time()
     if not isinstance(req.text, list):
         text = [req.text]
@@ -672,7 +683,8 @@ async def semantic_embedding(req: EmbeddingRequest) -> EmbeddingResponse:
     )
 
 @app.post("/v1/rerank")
-async def semantic_rerank(req: RerankRequest) -> RerankResponse:
+async def semantic_rerank(req: RerankRequest,
+                          _principal: Principal = Depends(require_permission("ai:use"))) -> RerankResponse:
     start_time = time.time()
     vector: np.ndarray = RAG().get_rerank(req.text_pair)
     return RerankResponse(
@@ -698,13 +710,22 @@ def _format_sse(event: str, data) -> str:
 
 
 @app.post("/chat")
-def chat(req: RAGRequest):
+def chat(req: RAGRequest, principal: Principal = Depends(require_permission("ai:use"))):
     start_time = time.time()
     rag = RAG()
     request_id = request_id_var.get()
+    # 只能对自己部门的知识库提问；跨部门或不存在的库统一返回 404
+    with Session() as session:
+        kb = session.query(KnowledgeDatabase).filter(
+            KnowledgeDatabase.knowledge_id == req.knowledge_id,
+            *tenant_conditions(KnowledgeDatabase, principal),
+        ).first()
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
     # 检索/组装在 SSE 头发出之前完成：失败走 HTTPException → 统一错误信封（非200）
     try:
-        llm_messages, debug_info = rag._retrieve_context(req.knowledge_id, req.message)
+        llm_messages, debug_info = rag._retrieve_context(
+            req.knowledge_id, req.message, department_id=principal.department_scope())
     except Exception as e:
         logger.exception("[chat] 检索失败: knowledge_id=%d", req.knowledge_id)
         raise HTTPException(status_code=500, detail=str(e))
@@ -733,5 +754,3 @@ def health_check():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=config["rag"]["port"], workers=1)
-
-

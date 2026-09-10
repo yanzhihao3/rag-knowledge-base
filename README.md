@@ -8,6 +8,8 @@
 
 **后端**：FastAPI / Elasticsearch / MySQL（默认，可切 SQLite）/ Ollama / SBert / BM25 / pdfplumber
 
+**认证与权限**：JWT（access + refresh）/ RBAC 角色权限 / 多租户数据隔离
+
 ## 项目结构
 
 ```
@@ -47,7 +49,10 @@ ollama serve
 # 3. 首次运行 / 拉取新代码后，先同步数据库表结构
 alembic upgrade head
 
-# 4. 启动后端
+# 4. 创建初始管理员（接口要求管理员权限，第一个管理员由脚本初始化）
+python scripts/create_user.py --username admin --password 'Admin@12345' --role admin --department-id 1
+
+# 5. 启动后端
 python main.py
 ```
 
@@ -153,6 +158,10 @@ PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/v1/auth/login` | 登录，返回 access + refresh token（无需认证） |
+| POST | `/v1/auth/refresh` | 用 refresh token 换新 token |
+| GET | `/v1/auth/me` | 当前用户信息 |
+| POST | `/v1/auth/register` | 创建用户（仅管理员） |
 | GET | `/v1/knowledge_base` | 查询知识库 |
 | GET | `/v1/knowledge_base/list` | 知识库列表 |
 | POST | `/v1/knowledge_base` | 创建知识库 |
@@ -164,6 +173,42 @@ PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 | POST | `/v1/embedding` | 文本向量化 |
 | POST | `/v1/rerank` | 重排序 |
 | POST | `/chat` | RAG 多轮对话（含 debug_info 检索详情） |
+
+## 认证与权限（JWT + RBAC + 多租户）
+
+### 初始化管理员
+
+`/v1/auth/register` 需要管理员权限，所以第一个管理员用脚本创建（企业里通常也由运维初始化）：
+
+```bash
+python scripts/create_user.py --username admin --password 'Admin@12345' --role admin --department-id 1
+```
+
+### 登录获取 token
+
+```bash
+# OAuth2 密码流程（表单参数），返回 access_token（30 分钟）与 refresh_token（7 天）
+curl -X POST "http://localhost:6010/v1/auth/login" \
+  -d "username=admin&password=Admin@12345"
+```
+
+后续请求带上 `Authorization: Bearer <access_token>`；也可以直接用 Swagger `/docs` 右上角的 **Authorize** 按钮登录。
+
+### 角色与权限
+
+| 角色 | 权限范围 |
+|------|----------|
+| admin | 全部操作，可跨部门 |
+| editor | 本部门知识库/文档增删改 + 问答 |
+| viewer | 本部门只读 + 问答 |
+| system | 通过 `X-API-Key` 调用（脚本 / CI），可跨部门 |
+
+### 多租户隔离规则
+
+- 创建知识库/文档时，`owner_id` / `department_id` 由服务端按当前登录用户写入，**请求体传的一律忽略**；
+- 查询、列表、删除、问答全部强制按本部门过滤（admin / system 除外）；
+- 跨部门访问与"资源不存在"统一返回 404，不泄露资源是否存在；
+- ES 检索同样带 `department_id` 过滤，避免从向量/全文检索侧绕过隔离。
 
 ## 数据存储
 

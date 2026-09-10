@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import create_engine, Boolean, Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, timezone
@@ -106,6 +106,26 @@ class KnowledgeDocument(Base):
     update_dt = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     knowledge = relationship("KnowledgeDatabase", back_populates="documents")
+
+
+class User(Base):
+    """系统用户：认证与租户隔离的基础（role 决定能干什么，department_id 决定能看谁的数据）。"""
+    __tablename__ = 'user'
+
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default='viewer')      # admin / editor / viewer
+    department_id = Column(Integer, nullable=False, default=0, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    create_dt = Column(DateTime, default=datetime.now)
+    update_dt = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    last_login_dt = Column(DateTime, nullable=True)
+
+    def __str__(self):
+        return (f"User(user_id={self.user_id})(username={self.username}, "
+                f"role={self.role}, department_id={self.department_id})")
+
 
 # 表结构交给 Alembic 管理：新环境启动前先执行 `alembic upgrade head`。
 # 这里不再 import 时自动建表，避免“代码改了模型、库却没跟着变”的问题。

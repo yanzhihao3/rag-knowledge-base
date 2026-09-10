@@ -6,6 +6,8 @@
 
 **技术栈**：FastAPI / Elasticsearch / MySQL（默认，可切 SQLite）/ Ollama / SBert / BM25 / pdfplumber
 
+**认证与权限**：JWT（access + refresh）+ RBAC 角色权限 + 多租户数据隔离（`security.py` / `auth_routes.py`）
+
 **观测**：Python 标准库 `logging` + `request_id` 关联 + 检索链路耗时拆分 + 敏感内容脱敏
 
 **运行**：Ollama 本地运行 LLM（默认 `qwen2.5:1.5b`），服务端口 6010。
@@ -20,8 +22,10 @@
 ├── es_api.py            # Elasticsearch 操作：向量索引、全文检索、级联删除
 ├── logging_config.py    # 日志底座：统一格式 + request_id 注入 + 轮转文件
 ├── router_schemas.py    # API 请求/响应数据结构
+├── security.py          # 认证与授权：bcrypt 密码、JWT、权限依赖、租户过滤
+├── auth_routes.py       # 认证接口：登录 / 刷新 / 当前用户 / 创建用户
 ├── alembic/             # 数据库迁移（表结构版本管理）
-├── scripts/             # 运维脚本（如 SQLite → MySQL 数据搬迁）
+├── scripts/             # 运维脚本（初始管理员创建、SQLite → MySQL 数据搬迁）
 ├── config.yaml          # 配置：ES、数据库、模型路径、LLM
 ├── upload_files/        # 上传的 PDF 文件
 ├── test/                # 单元测试
