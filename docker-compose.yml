@@ -38,5 +38,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    # 开启 AOF 持久化：Redis 重启后队列不丢
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   es_data:
+  redis_data:

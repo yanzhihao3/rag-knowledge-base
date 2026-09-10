@@ -8,6 +8,8 @@
 
 **认证与权限**：JWT（access + refresh）+ RBAC 角色权限 + 多租户数据隔离（`security.py` / `auth_routes.py`）
 
+**异步任务**：Celery + Redis（`celery_app.py` / `tasks.py` / `task_store.py`）
+
 **观测**：Python 标准库 `logging` + `request_id` 关联 + 检索链路耗时拆分 + 敏感内容脱敏
 
 **运行**：Ollama 本地运行 LLM（默认 `qwen2.5:1.5b`），服务端口 6010。
@@ -24,6 +26,10 @@
 ├── router_schemas.py    # API 请求/响应数据结构
 ├── security.py          # 认证与授权：bcrypt 密码、JWT、权限依赖、租户过滤
 ├── auth_routes.py       # 认证接口：登录 / 刷新 / 当前用户 / 创建用户
+├── celery_app.py        # Celery 应用（Redis broker / backend，acks_late 不丢任务）
+├── tasks.py             # 文档解析任务（幂等投递 + 分层重试 + 状态回写）
+├── task_store.py        # 任务状态存储（task 表）
+├── env_loader.py        # .env 加载（环境变量 > .env > config.yaml）
 ├── alembic/             # 数据库迁移（表结构版本管理）
 ├── scripts/             # 运维脚本（初始管理员创建、SQLite → MySQL 数据搬迁）
 ├── config.yaml          # 配置：ES、数据库、模型路径、LLM
@@ -99,7 +105,7 @@ rag:
 
 ## 检索流程
 
-1. **PDF 上传** → `BackgroundTasks` 异步调用 `extract_content()` 解析页面文本
+1. **PDF 上传** → 投递 Celery 任务（Redis 队列），worker 调用 `extract_content()` 解析页面文本；状态写入 `task` 表，可用 `/v1/task` 查询
 2. **分块** → 按 256 字符分块（中文 1 字 ≈ 1 token），20 字符重叠
 3. **向量化** → BGE 生成 512 维向量，写入 ES
 4. **检索时** → Query 改写（规则触发，结合最近 2 轮历史理解指代）→ BM25 + KNN **双路并行召回** → RRF 融合取前 10 条 → Cross-Encoder 重排 → **只保留前 5 条（rerank_top_k）进 Prompt**；四段耗时（改写/向量/召回/重排）单独打点记录日志

@@ -83,6 +83,7 @@ class DocumentResponse(BaseModel):
     title: str
     knowledge_id: int
     file_type: str
+    task_id: str = Field(default="", description="文档解析任务 ID（异步任务队列）")
     response_code: int = Field(description="响应代码，用于成功或错误信息")
     response_msg: str = Field(description="响应信息， 详细描述响应状态或错误信息")
     process_status: str = Field(description="处理状态，例如 'completed','pending','failed'")

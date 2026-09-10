@@ -12,7 +12,7 @@ import uvicorn
 from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from typing_extensions import Annotated
 from typing import List, Dict, Optional
-from fastapi import FastAPI, File, UploadFile, Form, BackgroundTasks, Request, Depends, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, Request, Depends, HTTPException
 from pydantic import BaseModel
 from router_schemas import (
      EmbeddingRequest, EmbeddingResponse,
@@ -25,6 +25,9 @@ from logging_config import setup_logging, request_id_var
 from fastapi.responses import JSONResponse, StreamingResponse
 from auth_routes import router as auth_router
 from security import Principal, require_permission, tenant_conditions
+from task_store import delete_by_document as delete_tasks_by_document
+from task_store import get_latest_task, get_task
+from tasks import enqueue_parse_document
 
 setup_logging()
 
@@ -66,6 +69,12 @@ def _is_retryable_db_error(exc: BaseException) -> bool:
 
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
 _UPLOAD_DIR = "upload_files"
+
+
+def _is_visible(department_id: int, principal: Principal) -> bool:
+    """任务/资源是否对当前身份可见（admin / system 不受部门限制）。"""
+    scope = principal.department_scope()
+    return scope is None or department_id == scope
 
 
 def _db_operation_with_retry(fn, *args, **kwargs):
@@ -326,6 +335,8 @@ def delete_knowledge_base(knowledge_id: int,
                     task_state_machine.reset(str(document_id))
                 except Exception:
                     logger.warning("清理任务状态失败，需手动清理: document_id=%s", document_id)
+                # 异步任务记录一并清理（task 表）
+                delete_tasks_by_document(document_id)
             return KnowledgeResponse(
                 request_id=str(uuid.uuid4()),
                 knowledge_id=knowledge_id,
@@ -526,6 +537,8 @@ def delete_document(document_id: int,
                 task_state_machine.reset(str(document_id))
             except Exception:
                 logger.warning("清理任务状态失败，需手动清理: document_id=%d", document_id)
+            # 异步任务记录一并清理（task 表）
+            delete_tasks_by_document(document_id)
             return DocumentResponse(
                 request_id=str(uuid.uuid4()),
                 document_id=document_id, knowledge_id=knowledge_id,
@@ -545,13 +558,44 @@ def delete_document(document_id: int,
         process_time=time.time() - start_time,
     )
 
+@app.get("/v1/task")
+def get_task_status(task_id: str,
+                    principal: Principal = Depends(require_permission("doc:read"))):
+    """按 task_id 查询文档解析任务状态（含重试次数与错误信息）。"""
+    task = get_task(task_id)
+    if task is None or not _is_visible(task["department_id"], principal):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        "request_id": str(uuid.uuid4()),
+        "response_code": 200,
+        "response_msg": "ok",
+        "process_status": "completed",
+        "task": task,
+    }
+
+
+@app.get("/v1/document/status")
+def get_document_task_status(document_id: int,
+                             principal: Principal = Depends(require_permission("doc:read"))):
+    """按 document_id 查询最近一次解析任务状态。"""
+    task = get_latest_task(document_id)
+    if task is None or not _is_visible(task["department_id"], principal):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        "request_id": str(uuid.uuid4()),
+        "response_code": 200,
+        "response_msg": "ok",
+        "process_status": "completed",
+        "task": task,
+    }
+
+
 @app.post("/v1/document")
 def add_document(
         knowledge_id: int = Form(),
         title: str = Form(),
         category: str = Form(),
         file: UploadFile = File(...),
-        background_tasks: BackgroundTasks = None,
         principal: Principal = Depends(require_permission("doc:write")),
 ) -> DocumentResponse:
     start_time = time.time()
@@ -625,16 +669,13 @@ def add_document(
                 process_time=time.time() - start_time,
             )
         document_id, file_path = result
-        background_tasks.add_task(
-            RAG().extract_content,
-            knowledge_id=knowledge_id,
-            document_id=document_id,
-            title=title,
-            file_type=file.content_type,
-            file_path=file_path,
-            owner_id=owner_id,
-            department_id=department_id,
-        )
+        # 投递到 Celery 队列：API 立刻返回，解析由独立 worker 执行；
+        # 服务重启不会丢任务（任务在 Redis 里，worker 会重新领取）
+        with Session() as session:
+            doc = session.query(KnowledgeDocument).filter(
+                KnowledgeDocument.document_id == document_id
+            ).first()
+            task_id = enqueue_parse_document(doc)
         return DocumentResponse(
             request_id=str(uuid.uuid4()),
             document_id=document_id,
@@ -642,6 +683,7 @@ def add_document(
             category=category,
             file_type=file.content_type,
             knowledge_id=knowledge_id,
+            task_id=task_id,
             response_code=200,
             response_msg="文档添加成功",
             process_status="completed",

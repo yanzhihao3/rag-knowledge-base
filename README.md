@@ -10,6 +10,8 @@
 
 **认证与权限**：JWT（access + refresh）/ RBAC 角色权限 / 多租户数据隔离
 
+**异步任务**：Celery + Redis（文档解析脱离 API 进程，服务重启不丢任务）
+
 ## 项目结构
 
 ```
@@ -20,6 +22,11 @@
 ├── es_api.py            # Elasticsearch 操作：向量索引、全文检索、级联删除
 ├── logging_config.py    # 日志底座：统一格式 + request_id 注入 + 轮转文件
 ├── router_schemas.py    # API 请求/响应数据结构
+├── security.py          # 认证与授权：密码哈希、JWT、权限依赖、租户过滤
+├── auth_routes.py       # 认证接口：登录 / 刷新 / 当前用户 / 创建用户
+├── celery_app.py        # Celery 应用（Redis 作为 broker / backend）
+├── tasks.py             # 异步任务：文档解析入库（幂等投递 + 分层重试）
+├── task_store.py        # 任务状态存储（task 表，可查询 / 可审计）
 ├── alembic/             # 数据库迁移（表结构版本管理）
 ├── scripts/             # 运维脚本（如 SQLite → MySQL 数据搬迁）
 ├── config.yaml          # 配置：数据库、ES、模型路径、LLM
@@ -52,8 +59,14 @@ alembic upgrade head
 # 4. 创建初始管理员（接口要求管理员权限，第一个管理员由脚本初始化）
 python scripts/create_user.py --username admin --password 'Admin@12345' --role admin --department-id 1
 
-# 5. 启动后端
+# 5. 启动 Redis（异步任务队列的 broker）
+docker run -d --name rag-redis -p 6379:6379 -v rag_redis_data:/data redis:7-alpine redis-server --appendonly yes
+
+# 6. 启动后端
 python main.py
+
+# 7. 另开窗口启动 Celery worker（Windows 必须加 -P solo）
+celery -A celery_app worker -l info -P solo
 ```
 
 - 后端运行在 `http://localhost:6010`
@@ -114,7 +127,12 @@ python main.py
 
 ### 6. 异步处理
 
-PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
+PDF 上传后立即返回，解析任务投递到 Redis 队列，由独立 worker 进程执行：
+
+- API 只负责"存元数据 + 落盘 + 投递任务"，不被向量化拖慢；
+- `acks_late=True`：worker 执行完才 ack，**worker 崩溃或服务重启任务会自动重新投递**；
+- 分层重试：函数内重试处理瞬时抖动，任务级重试（指数退避）处理进程级故障；
+- 任务状态写入 `task` 表，可用 `GET /v1/task?task_id=...` 查询（pending → started → success / failure）。
 
 ### 7. 数据一致性（级联删除）
 
@@ -162,6 +180,8 @@ PDF 上传后立即返回，解析任务后台执行，不阻塞 API。
 | POST | `/v1/auth/refresh` | 用 refresh token 换新 token |
 | GET | `/v1/auth/me` | 当前用户信息 |
 | POST | `/v1/auth/register` | 创建用户（仅管理员） |
+| GET | `/v1/task` | 查询异步任务状态（按 task_id） |
+| GET | `/v1/document/status` | 查询文档最近一次解析任务状态 |
 | GET | `/v1/knowledge_base` | 查询知识库 |
 | GET | `/v1/knowledge_base/list` | 知识库列表 |
 | POST | `/v1/knowledge_base` | 创建知识库 |

@@ -5,28 +5,11 @@ from datetime import datetime, timezone
 import yaml
 import os
 
+from env_loader import load_dotenv
+
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
-
-
-def _load_dotenv(path: str = ".env") -> None:
-    """加载本地 .env 文件（存在才加载），免去每次开终端手设环境变量。
-
-    优先级：真实环境变量 > .env > config.yaml > 代码默认值。
-    .env 已写入 .gitignore，密码不会进版本库。
-    """
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as file:
-        for line in file:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-_load_dotenv()
+load_dotenv()
 
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
@@ -125,6 +108,32 @@ class User(Base):
     def __str__(self):
         return (f"User(user_id={self.user_id})(username={self.username}, "
                 f"role={self.role}, department_id={self.department_id})")
+
+
+class Task(Base):
+    """异步任务记录：文档解析任务的状态、重试次数与错误信息。
+
+    状态机：pending → started → success / failure（重试时回到 started，retries+1）
+    """
+    __tablename__ = 'task'
+
+    task_id = Column(String(64), primary_key=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    knowledge_id = Column(Integer, index=True)
+    owner_id = Column(Integer, default=0)
+    department_id = Column(Integer, default=0, index=True)
+    status = Column(String(20), nullable=False, default='pending', index=True)
+    retries = Column(Integer, nullable=False, default=0)
+    celery_task_id = Column(String(64))
+    error_msg = Column(String(1000))
+    create_dt = Column(DateTime, default=datetime.now)
+    update_dt = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    started_dt = Column(DateTime, nullable=True)
+    finished_dt = Column(DateTime, nullable=True)
+
+    def __str__(self):
+        return (f"Task(task_id={self.task_id})(document_id={self.document_id}, "
+                f"status={self.status}, retries={self.retries})")
 
 
 # 表结构交给 Alembic 管理：新环境启动前先执行 `alembic upgrade head`。
