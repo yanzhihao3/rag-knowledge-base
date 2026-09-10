@@ -9,6 +9,9 @@ build/
 rag.db
 *.db
 
+# Local secrets（本地密码等，禁止提交）
+.env
+
 # Logs
 rag.log
 rag.log.*

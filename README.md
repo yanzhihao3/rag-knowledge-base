@@ -239,6 +239,9 @@ alembic downgrade -1
 
 > 存量库首次接入 Alembic 时用 `alembic stamp head` 打版本标签，不要对已有数据的库直接 upgrade。
 
+> 本地数据库配置写在项目根目录的 `.env`（已被 .gitignore 忽略，密码不会提交），
+> 启动时由 `db_api.py` 自动加载。优先级：环境变量 > `.env` > `config.yaml`。
+
 ## 项目亮点
 
 1. **双路并行召回**：BM25 + KNN 通过 ThreadPoolExecutor 并行执行，降低检索延迟

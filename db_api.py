@@ -7,6 +7,27 @@ import os
 
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """加载本地 .env 文件（存在才加载），免去每次开终端手设环境变量。
+
+    优先级：真实环境变量 > .env > config.yaml > 代码默认值。
+    .env 已写入 .gitignore，密码不会进版本库。
+    """
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 with open("config.yaml", 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)
 
