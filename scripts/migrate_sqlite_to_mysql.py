@@ -6,7 +6,7 @@ document_id 与数据库记录关联。如果 MySQL 自增出来的 ID 和 SQLit
 
 用法（先启动 MySQL，并确认 rag 库已存在；目标表要求为空）：
     pip install pymysql cryptography
-    python scripts/migrate_sqlite_to_mysql.pygit push origin enterprise/mysql
+    python scripts/migrate_sqlite_to_mysql.py
 
 可选参数：
     --sqlite-path xxx.db   指定源 SQLite 文件（默认取 config.yaml 的 path）
