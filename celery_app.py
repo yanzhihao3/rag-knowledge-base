@@ -34,6 +34,11 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_track_started=True,
     broker_connection_retry_on_startup=True,
+    # worker 崩溃后，未确认的任务最长等 5 分钟就会被重新投递（默认 1 小时太长）
+    broker_transport_options={"visibility_timeout": 300},
+    result_backend_transport_options={"visibility_timeout": 300},
+    # 连接断开时取消正在跑的长任务，交给重新投递处理，避免"半死不活"占着 worker
+    worker_cancel_long_running_tasks_on_connection_loss=True,
     # 结果保留 1 天，便于排查历史任务
     result_expires=86400,
 )
