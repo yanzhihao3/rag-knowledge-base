@@ -1,0 +1,12 @@
+# CI / 轻量单元测试依赖：不装 torch / transformers / sentence-transformers
+# 重型测试（需要 ES、模型、Ollama）在 CI 中由 RAG_SKIP_INTEGRATION=1 跳过
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+pyyaml>=6.0
+numpy>=1.24.0
+elasticsearch>=8.0.0
+python-multipart>=0.0.9
+pytest>=8.0.0
