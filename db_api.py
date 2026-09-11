@@ -39,7 +39,7 @@ elif db_type in ('mysql', 'mysql+pymysql'):
     # MySQL 分支：URL.create 负责安全编码（密码里含 @ / # 也不会拼坏连接串）
     engine = create_engine(
         URL.create(
-            drivername="mysql+pymysql",                  # 驱动：pymysql
+            drivername="mysql+pymysql",                  # 告诉 SQLAlchemy：我要连 MySQL，但底层用 PyMySQL 这个驱动来实际通信。
             username=_cfg(db_config, 'username', 'RAG_DB_USER', 'rag'),
             password=_cfg(db_config, 'password', 'RAG_DB_PASSWORD', ''),
             host=_cfg(db_config, 'host', 'RAG_DB_HOST', 'localhost'),
