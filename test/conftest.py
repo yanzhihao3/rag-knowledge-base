@@ -46,6 +46,7 @@ _INTEGRATION_TESTS = [
     "test_chat.py",
     "test_parallel_recall.py",
     "test_pdf_processing.py",
+    "test_chunking.py",
     "test_query_rewrite.py",
     "test_auth_api.py",
 ]

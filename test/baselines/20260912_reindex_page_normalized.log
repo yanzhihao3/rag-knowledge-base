@@ -1,0 +1,27 @@
+文档: document_id=3 knowledge_id=2 title=22
+文件: upload_files\document_3_大模型RAG实战, RAG原理、应用与系统构建 (汪鹏, 谷清水, 卞龙鹏)(1).pdf
+
+Loading weights:   0%|          | 0/71 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 71/71 [00:00<00:00, 11832.78it/s]
+BertModel LOAD REPORT from: D:/AILLM/Week04/models/BAAI/bge-small-zh-v1.5/
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 201/201 [00:00<00:00, 8033.84it/s]
+XLMRobertaForSequenceClassification LOAD REPORT from: D:/AILLM/Week04/models/BAAI/bge-reranker-base/
+Key                             | Status     |  | 
+--------------------------------+------------+--+-
+roberta.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+分块策略: semantic  chunk_size=400  chunk_overlap_sentences=1  chunk_overlap=20
+当前索引: 总 629（页级 240 + 子块 389）
+重灌完成，用时 59s
+新索引: 总 628（页级 240 + 子块 388）
+对比: 子块 389 → 388，总块数 629 → 628
