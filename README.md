@@ -80,7 +80,9 @@ celery -A celery_app worker -l info -P solo
 上传 PDF 文档，系统自动：
 - 提取页面文本和表格
 - 处理跨页断句
-- 按 256 字符分块（中文 1 字 ≈ 1 token），20 字符重叠
+- 分块：先把 pdfplumber 的"视觉行"拼回逻辑行（这本 PDF 每个视觉行一个 `\n`，平均行长仅 26~35 字），
+  再按句子边界聚合成目标 400 字、块间整句重叠 1 句，保证不切在句子中间
+  （`chunk_strategy: semantic`；改成 `fixed` 可回退到旧的 256 字符定长切分）
 - 批量生成 BGE 向量
 - 写入 ES 索引
 

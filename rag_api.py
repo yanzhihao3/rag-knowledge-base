@@ -84,6 +84,116 @@ def split_text_with_overlap(text, chunk_size, chunk_overlap):
     return chunks
 
 
+_SENT_END_CHARS = "。！？!?；;"
+_SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?；;])")
+# 结构行：章节号（3.2 / 7.3.1）、括号序号（（4）/ 3））、图表题注（图3-2 / 表4-1）、第N章。
+# 这类行是独立单元：既不能被当成"上一行的折行"粘到正文里，也不能让正文粘到它后面。
+_STRUCT_LINE_RE = re.compile(
+    r"^(?:"
+    r"\d+(?:\.\d+)*\.\s"                      # "2. RAG" / "7.3. 召回优化"
+    r"|\d+(?:\.\d+)+\s"                       # "7.3 召回环节优化"
+    r"|第[一二三四五六七八九十百\d]+[章节]"     # "第6章"
+    r"|[图表]\s*\d+"                          # "图3-2" / "表4-1"
+    r"|（\d+）|\d+）"                          # "（4）输出解析器" / "3）硬件加速"
+    r")"
+)
+
+
+def _ends_sentence(text: str) -> bool:
+    return bool(text) and text[-1] in _SENT_END_CHARS
+
+
+def _is_structural(line: str) -> bool:
+    return bool(_STRUCT_LINE_RE.match(line or ""))
+
+
+def join_visual_lines(text):
+    """把 pdfplumber 的"视觉行"拼回逻辑行。
+
+    为什么需要这一步：这本 PDF 用 pdfplumber 抽出来是**每个视觉行一个 \\n**，
+    平均行长只有 26~35 字，而且会在词中间断开（`一定数\\n量`、`Co-\\noccurrence`）。
+    直接拿这种文本去切块，等于在一个"已经被切碎"的流上再切一次。
+
+    拼接规则：
+      - 上一行没有以句末标点结尾，且两行都不是结构行 → 行内折行，直接拼接
+        （中文不补空格；英文连字符正好接回 `Co-occurrence`）；
+      - 上一行以句末标点结尾 → 这是真正的语义边界，保留；
+      - 任一行是章节号 / 图表题注 / 括号序号 → 强制断段，避免"7.3 标题正文..."
+        这种标题粘正文的块。
+    """
+    lines = []
+    for raw in (text or "").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        prev = lines[-1] if lines else ""
+        if (prev and not _ends_sentence(prev)
+                and not _is_structural(prev) and not _is_structural(line)):
+            lines[-1] += line
+        else:
+            lines.append(line)
+    return lines
+
+
+def split_sentences(text):
+    """按中英文句末标点切句，标点保留在前一句末尾；末尾没标点的残句也保留。"""
+    return [p.strip() for p in _SENT_SPLIT_RE.split(text or "") if p.strip()]
+
+
+def split_text_semantic(text, target_size=400, overlap_sentences=1, max_size=None):
+    """语义分块：视觉行拼回 → 按句切 → 按目标长度聚合，块间用"整句"重叠。
+
+    和 split_text_with_overlap（纯字符窗口）的区别：
+      - 不在句子中间切（唯一例外：单句本身就超过 max_size，只能硬切）；
+      - 重叠不是 20 个字符而是最后一整句，不会有半句话横跨两个块；
+      - 块长按句子边界就近取，不追求精确等于 target_size。
+
+    :param target_size: 目标块大小（字）。累计超过它就换块。
+    :param overlap_sentences: 块间重叠的整句数，0 表示不重叠。
+    :param max_size: 单块硬上限，超过它的单句会被硬切；默认 target_size * 1.5。
+    """
+    if max_size is None:
+        max_size = int(target_size * 1.5)
+
+    sentences = []
+    for line in join_visual_lines(text):
+        sentences.extend(split_sentences(line))
+
+    chunks, buf, size = [], [], 0
+    for sent in sentences:
+        if len(sent) > max_size:
+            # 单句超长（表格被串成一行、代码块等）：冲掉缓冲后硬切
+            if buf:
+                chunks.append("".join(buf))
+                buf, size = [], 0
+            for i in range(0, len(sent), target_size):
+                chunks.append(sent[i:i + target_size])
+            continue
+        if buf and size + len(sent) > target_size:
+            chunks.append("".join(buf))
+            buf = buf[-overlap_sentences:] if overlap_sentences > 0 else []
+            size = sum(len(x) for x in buf)
+        buf.append(sent)
+        size += len(sent)
+    if buf:
+        chunks.append("".join(buf))
+    return chunks
+
+
+def _as_text(value) -> str:
+    """统一取值：ES 的 fields 返回列表（一个字段可能多值），_source 返回标量。
+
+    这里必须两种都吃：flat 模式的记录来自 fields（chunk_content 是 ["文本"]），
+    parent_child 模式的记录是我们自己拼的（chunk_content 是 "文本"）。
+    历史上这里写死了 [0] —— 在 parent_child 下就变成"取第一个字符"，
+    结果喂给 LLM 的资料只剩 5 个字，模型只能回"无法回答"。召回率指标完全看不出来，
+    是回答准确率评测才暴露的。
+    """
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
+
+
 def _format_related_document(records) -> str:
     """把检索结果拼成喂给 LLM 的资料。
 
@@ -92,10 +202,9 @@ def _format_related_document(records) -> str:
     """
     parts = []
     for x in records:
-        content = (x.get("chunk_content") or [""])[0]
-        parts.append(content)
+        parts.append(_as_text(x.get("chunk_content")))
         for table in (x.get("chunk_tables") or []):
-            parts.append(table)
+            parts.append(_as_text(table))
     return "\n".join(parts)
 
 
@@ -183,6 +292,19 @@ class RAG:
         ]["dims"]
         self.chunk_size = config["rag"]["chunk_size"]
         self.chunk_overlap = config["rag"]["chunk_overlap"]
+        # 分块策略：
+        #   semantic（默认）= 视觉行拼回 + 按句边界聚合，重叠按"整句"算；
+        #   fixed           = 旧的定长字符窗口，保留它只为复现旧基线（256/20）。
+        self.chunk_strategy = config["rag"].get("chunk_strategy", "semantic")
+        self.chunk_overlap_sentences = config["rag"].get("chunk_overlap_sentences", 1)
+        # 检索模式：
+        #   flat         = 页级块和子块在同一个池子里竞争（改前的行为）；
+        #   parent_child = 只在子块上召回 + RRF，再按页聚合、把整页正文送去生成。
+        # 允许用环境变量覆盖，方便在同一份索引上做 A/B：
+        #   $env:RAG_RETRIEVAL_MODE='parent_child'
+        self.retrieval_mode = (os.environ.get("RAG_RETRIEVAL_MODE")
+                               or config["rag"].get("retrieval_mode", "flat"))
+        self.parent_max_chars = config["rag"].get("parent_max_chars", 1200)
         self.chunk_candidate = config["rag"]["chunk_candidate"]
         # 最终进 Prompt 的条数：召回/重排阶段保留 chunk_candidate 条保证召回率，
         # 最后一步截断到 rerank_top_k 条，控制噪音与上下文长度。
@@ -246,8 +368,14 @@ class RAG:
                 if tail:
                     prev_page_tail = tail
 
+                # 页级（父）块也存归一化后的文本：把 pdfplumber 的视觉行拼回逻辑行。
+                # 之前只归一了子块，页级块留的是原始输出（"一定数\n量的"），带来两个问题：
+                #   1. 跨行的词在页级文本里匹配不上 → 评测的"答案页"口径会低估；
+                #   2. parent_child 把整页送进 Prompt 时，LLM 看到的是断行文本。
+                page_text_clean = "\n".join(join_visual_lines(current_page_text))
+
                 # 整页向量（包含表格内容）
-                page_text_with_table = current_page_text + table_content
+                page_text_with_table = page_text_clean + table_content
                 embedding_vector = self.get_embedding(page_text_with_table)
                 page_data = {
                     "document_id": document_id,
@@ -256,7 +384,7 @@ class RAG:
                     "department_id": department_id,
                     "page_number": page_number,
                     "chunk_id": 0,
-                    "chunk_content": current_page_text,
+                    "chunk_content": page_text_clean,
                     "chunk_images": [],
                     "chunk_tables": [table_content] if table_content else [],
                     "embedding_vector": [float(x) for x in list(embedding_vector)]
@@ -267,8 +395,13 @@ class RAG:
                     document=page_data,
                 )
 
-                # 分块向量
-                page_chunks = split_text_with_overlap(current_page_text, self.chunk_size, self.chunk_overlap)
+                # 分块向量（策略见 config.rag.chunk_strategy）
+                if self.chunk_strategy == "semantic":
+                    page_chunks = split_text_semantic(
+                        page_text_clean, self.chunk_size, self.chunk_overlap_sentences)
+                else:
+                    page_chunks = split_text_with_overlap(
+                        page_text_clean, self.chunk_size, self.chunk_overlap)
                 embedding_vector = self.get_embedding(page_chunks)  # 批量生成向量
                 for chunk_idx in range(1, len(page_chunks)+1):
                     page_data = {
@@ -376,6 +509,9 @@ class RAG:
         if department_id is not None:
             # 租户隔离：只召回本部门的分块（admin/system 传 None 表示不限制）
             filters.append({"term": {"department_id": department_id}})
+        if self.retrieval_mode == "parent_child":
+            # 父子块：召回阶段只打子块，父块（页级，chunk_id=0）不参与竞争
+            filters.append({"range": {"chunk_id": {"gte": 1}}})
         return es.search(index="chunk_info",
                          body={
                              "query": {
@@ -394,6 +530,8 @@ class RAG:
         filters = [{"term": {"knowledge_id": knowledge_id}}]
         if department_id is not None:
             filters.append({"term": {"department_id": department_id}})
+        if self.retrieval_mode == "parent_child":
+            filters.append({"range": {"chunk_id": {"gte": 1}}})
         knn_query = {
             "field": "embedding_vector",
             "query_vector": [float(x) for x in list(embedding_vector)],
@@ -408,6 +546,74 @@ class RAG:
         return es.search(index="chunk_info", knn=knn_query,
                          fields=["chunk_id", "document_id", "knowledge_id", "page_number", "chunk_content", "chunk_tables"],
                          source=False)
+
+    @staticmethod
+    def _first(value):
+        """ES 的 fields 返回的是列表（一个字段可能有多个值），这里取第一个；标量原样返回。"""
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+
+    def _expand_to_parents(self, sorted_dict, search_id2record):
+        """父子块检索的第 2、3 步：按父块（页）聚合子块分数，再把父块正文捞回来。
+
+        为什么按页聚合，而不是把命中的子块逐个展开：
+          - 同一页命中多个子块时，逐个展开会在 Prompt 里塞进好几份同样的整页文本，
+            token 直接翻倍，还会把 LLM 的注意力稀释掉；
+          - 分数累加本身是有意义的信号：一页里有 3 个子块命中，说明"整页都相关"，
+            比单个子块偶然命中更可信。
+
+        返回的记录里：
+          _id           —— 保留命中的**子块** id（评测定位和溯源都用它，不能换成父块 id）
+          parent_id     —— 父块（页级）id
+          chunk_content —— 父块全文（截断到 parent_max_chars），送 LLM 用
+          child_content —— 命中的子块原文，重排和 debug 用
+        """
+        groups, order = {}, []
+        for _id, score in sorted_dict:
+            rec = search_id2record[_id]
+            did = self._first(rec.get("document_id"))
+            page_no = self._first(rec.get("page_number"))
+            if did is None or page_no is None:
+                continue
+            pid = f"doc_{did}_page_{page_no}"
+            g = groups.get(pid)
+            if g is None:
+                groups[pid] = {"rrf": score, "best_id": _id, "best_score": score}
+                order.append(pid)
+            else:
+                g["rrf"] += score
+                if score > g["best_score"]:
+                    g["best_score"], g["best_id"] = score, _id
+
+        ranked = sorted(order, key=lambda p: groups[p]["rrf"], reverse=True)[:self.chunk_candidate]
+        if not ranked:
+            return []
+
+        resp = es.mget(index="chunk_info", ids=ranked)
+        parents = {d["_id"]: (d.get("_source") or {})
+                   for d in resp.get("docs", []) if d.get("found")}
+
+        out = []
+        for pid in ranked:
+            g = groups[pid]
+            child = search_id2record[g["best_id"]]
+            child_text = self._first(child.get("chunk_content")) or ""
+            src = parents.get(pid) or {}
+            parent_text = src.get("chunk_content") or child_text
+            out.append({
+                "_id": g["best_id"],
+                "parent_id": pid,
+                "chunk_content": parent_text[:self.parent_max_chars],
+                "child_content": child_text,
+                "rerank_text": child_text,
+                "chunk_tables": src.get("chunk_tables"),
+                "page_number": self._first(child.get("page_number")),
+                "document_id": self._first(child.get("document_id")),
+                "knowledge_id": self._first(child.get("knowledge_id")),
+                "rrf_score": g["rrf"],
+            })
+        return out
 
     def query_document(self, query: str, knowledge_id: int, history: List[Dict] = None,
                        department_id: Optional[int] = None) -> List[str]:
@@ -449,35 +655,53 @@ class RAG:
             if _id not in search_id2record:
                 search_id2record[_id] = {**record["fields"], "_id": _id}  # 附带 _id，便于评估时定位答案块
 
-        # 按总分排序，取前chunk_candidate条（config里是10条）
+        # 按总分排序，取前 chunk_candidate 条（config 里是 10 条）
         sorted_dict = sorted(fusion_score.items(), key=lambda kv: kv[1], reverse=True)
-        sorted_records = [search_id2record[x[0]] for x in sorted_dict][:self.chunk_candidate]
-        sorted_content = [x["chunk_content"] for x in sorted_records]
+        if self.retrieval_mode == "parent_child":
+            # 父子块：先按父块（页）聚合子块分数，再把父块正文捞回来
+            sorted_records = self._expand_to_parents(sorted_dict, search_id2record)
+        else:
+            sorted_records = [search_id2record[x[0]] for x in sorted_dict][:self.chunk_candidate]
 
         # 构造 debug 信息
         debug_chunks = []
-        for _id, score in sorted_dict[:self.chunk_candidate]:
-            record = search_id2record[_id]
-            content = (record.get("chunk_content") or [""])[0]
-            page = record.get("page_number")
-            page = page[0] if isinstance(page, list) else (page or 0)
-            doc_id = record.get("document_id")
-            doc_id = doc_id[0] if isinstance(doc_id, list) else (doc_id or 0)
-            debug_chunks.append({
-                "content": content[:200],
-                "page_number": page,
-                "document_id": doc_id,
-                "rrf_score": round(float(score), 4),
-                "rerank_score": None,
-            })
+        if self.retrieval_mode == "parent_child":
+            for rec in sorted_records:
+                debug_chunks.append({
+                    "content": (rec.get("child_content") or "")[:200],
+                    "page_number": rec.get("page_number"),
+                    "document_id": rec.get("document_id"),
+                    "parent_id": rec.get("parent_id"),
+                    "rrf_score": round(float(rec.get("rrf_score") or 0.0), 4),
+                    "rerank_score": None,
+                })
+        else:
+            for _id, score in sorted_dict[:self.chunk_candidate]:
+                record = search_id2record[_id]
+                content = _as_text(record.get("chunk_content"))
+                page = record.get("page_number")
+                page = page[0] if isinstance(page, list) else (page or 0)
+                doc_id = record.get("document_id")
+                doc_id = doc_id[0] if isinstance(doc_id, list) else (doc_id or 0)
+                debug_chunks.append({
+                    "content": content[:200],
+                    "page_number": page,
+                    "document_id": doc_id,
+                    "rrf_score": round(float(score), 4),
+                    "rerank_score": None,
+                })
         t3 = time.monotonic()
 
         if self.use_rerank:
             test_pair = []
-            for chunk_content in sorted_content:
-                text = chunk_content[0] if isinstance(chunk_content, list) else chunk_content
+            for rec in sorted_records:
+                # 父子块模式用命中的子块文本重排（语义更聚焦），送 LLM 时才换成父块全文
+                text = rec.get("rerank_text")
+                if text is None:
+                    chunk_content = rec.get("chunk_content")
+                    text = chunk_content[0] if isinstance(chunk_content, list) else chunk_content
                 test_pair.append([rewritten_query, text])
-            if not sorted_content:
+            if not sorted_records:
                 self._last_debug_info = {"rewritten_query": rewritten_query, "chunks": debug_chunks}
                 return sorted_records
 

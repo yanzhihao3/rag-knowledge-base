@@ -52,10 +52,19 @@ rag:
   llm_model: "qwen2.5:1.5b"
   embedding_model: "bge-small-zh-v1.5"
   rerank_model: "bge-reranker-base"
-  chunk_size: 256
-  chunk_overlap: 20
+  # 分块策略：semantic = 视觉行拼回 + 按句边界聚合（推荐）；
+  # fixed = 旧的定长字符切分，保留用于复现旧基线（chunk_size 256 / chunk_overlap 20）
+  chunk_strategy: "semantic"
+  chunk_size: 400            # semantic: 目标块大小（字）；fixed: 字符窗口
+  chunk_overlap_sentences: 1 # semantic: 块间整句重叠数
+  chunk_overlap: 20          # fixed: 字符重叠
   chunk_candidate: 10
   rerank_top_k: 5
+  # 检索模式：flat = 页级块与子块同池竞争（改前行为）；
+  # parent_child = 只在子块上召回，再按页聚合并把整页正文送去生成。
+  # 可用环境变量覆盖做 A/B：$env:RAG_RETRIEVAL_MODE='parent_child'
+  retrieval_mode: "flat"
+  parent_max_chars: 1200     # parent_child: 父块送进 Prompt 前截断到多少字
   use_embedding: true
   use_rerank: true
   use_rrf: true
