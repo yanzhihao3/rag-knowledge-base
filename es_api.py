@@ -73,6 +73,21 @@ def init_es():
         return False
 
     chunk_info_mapping = {
+        # 自定义分析器：把英文标识符按驼峰/下划线拆开，让用户搜"半截类名"也能命中。
+        # 必须是 standard（不能用 ik_max_word）——IK 会先把英文转小写，
+        # word_delimiter_graph 就看不到驼峰边界了。中文由主字段的 ik_max_word 负责，
+        # 这个字段只用来查英文标识符（standard 会把中文切成单字）。
+        'settings': {
+            'analysis': {
+                'analyzer': {
+                    'code_identifier': {
+                        'type': 'custom',
+                        'tokenizer': 'standard',
+                        'filter': ['word_delimiter_graph', 'lowercase'],
+                    }
+                }
+            }
+        },
         'mappings': {
             'properties': {
                 'document_id': {'type': 'integer'},
@@ -85,6 +100,13 @@ def init_es():
                     'type': 'text',
                     'analyzer': 'ik_max_word',
                     'search_analyzer': 'ik_max_word',
+                    'fields': {
+                        'delim': {
+                            'type': 'text',
+                            'analyzer': 'code_identifier',
+                            'search_analyzer': 'code_identifier',
+                        }
+                    },
                 },
                 'chunk_images': {'type': 'keyword'},
                 'chunk_tables': {'type': 'keyword'},

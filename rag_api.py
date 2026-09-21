@@ -204,6 +204,25 @@ def _as_text(value) -> str:
     return value or ""
 
 
+# 查询里的英文标识符（类名、函数名、变量名）。长度 >= 4 是为了避开 i / id / x 这类噪音。
+_EN_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
+
+
+def _identifier_clauses(query: str):
+    """把查询里的英文标识符单独拎出来，额外查一次"拆词"子字段。
+
+    要解决的问题（实测）：IK 把 PythonCodeTextSplitter 当成一个整体 token
+    （['pythoncodetextsplitter']），用户搜 TextSplitter 时切成 ['textsplitter']，
+    两者不相等 → 搜不到。也就是说用户必须打全名才行，而没人记得住完整类名。
+
+    做法：chunk_content.delim 这个子字段用 standard + word_delimiter_graph 把标识符
+    拆成 python / code / text / splitter。**只送英文词**是因为该字段会把中文切成单字
+    （'混合检索' → 混/合/检/索），中文查询走主字段，避免引入噪音。
+    """
+    ids = _EN_IDENT.findall(query or "")
+    return [{"match": {"chunk_content.delim": " ".join(ids)}}] if ids else []
+
+
 def _format_related_document(records) -> str:
     """把检索结果拼成喂给 LLM 的资料。
 
@@ -554,11 +573,15 @@ class RAG:
         if self.retrieval_mode == "parent_child":
             # 父子块：召回阶段只打子块，父块（页级，chunk_id=0）不参与竞争
             filters.append({"range": {"chunk_id": {"gte": 1}}})
+        # 用 should（而不是 must）：两个字段命中任一即可 —— 纯中文时两路等价，
+        # 带英文标识符时能把"只写了半截类名"的查询也捞回来
         return es.search(index="chunk_info",
                          body={
                              "query": {
                                  "bool": {
-                                     "must": [{"match": {"chunk_content": rewritten_query}}],
+                                     "should": [{"match": {"chunk_content": rewritten_query}}]
+                                               + _identifier_clauses(rewritten_query),
+                                     "minimum_should_match": 1,
                                      "filter": filters,
                                  }
                              },
@@ -620,7 +643,9 @@ class RAG:
 
         word_resp = es.search(
             index="chunk_info",
-            body={"query": {"bool": {"must": [{"match": {"chunk_content": rewritten_query}}],
+            body={"query": {"bool": {"should": [{"match": {"chunk_content": rewritten_query}}]
+                                               + _identifier_clauses(rewritten_query),
+                                     "minimum_should_match": 1,
                                      "filter": filters}},
                   "size": 50},
             fields=fields, source=False,
