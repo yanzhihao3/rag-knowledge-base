@@ -351,6 +351,64 @@ docs = text_splitter.split_text(text)
 新增内容全部带 `chunk_type` 字段，可被第三路召回专门检索，也支持幂等重灌（按
 `document_id + chunk_type` 先删后写）。
 
+### 5.7 标识符分词（2026-09-21 完成）
+
+**要解决的问题**（实测）：
+
+```
+代码里的 PythonCodeTextSplitter  → IK 切成 ['pythoncodetextsplitter']   ← 一个整体
+用户搜 TextSplitter              → 切成 ['textsplitter']
+                                   两者不相等 → 搜不到
+```
+
+也就是说用户**必须打全名**才搜得到，而真实场景里没人记得住完整类名
+（"那个 TextSplitter 有哪些？"是常见问法）。
+
+**做法**：给 `chunk_content` 加一个子字段 `delim`，挂自定义分析器：
+
+```json
+"code_identifier": {
+  "type": "custom",
+  "tokenizer": "standard",
+  "filter": ["word_delimiter_graph", "lowercase"]
+}
+```
+
+效果：`PythonCodeTextSplitter` → `python` / `code` / `text` / `splitter`
+
+**两个踩坑点（都实测过）**：
+
+1. **tokenizer 必须是 `standard`，不能用 `ik_max_word`** —— IK 会先把英文转小写，
+   `word_delimiter_graph` 就看不到驼峰边界了。实测 ik 版依然是
+   `['pythoncodetextsplitter']`，standard 版才拆得开。
+2. **filter 顺序不能反** —— 必须 `[word_delimiter_graph, lowercase]`（先拆后转小写）。
+
+**代价与对策**：`standard` 会把中文切成单字（`混合检索` → `混/合/检/索`）。
+所以**查询侧只把英文标识符送到这个字段**（`_identifier_clauses()` 用正则从查询里
+提取长度 ≥4 的英文词），中文查询仍走主字段 —— 否则中文查询会命中一堆无关文档。
+
+**另两个踩坑**：
+
+- 加 sub-field **不会自动回填老文档**，必须让它们重写一遍。`update_by_query` 默认
+  `detect_noop=true`，脚本没变化就跳过；而 `detect_noop` **不是合法的 URL 参数**。
+  最终用"给所有文档打 `schema_version = 2`"强制重写（711 条一次到位，秒级）。
+- 重新索引后 HNSW 图会重建，**向量路的结果可能有 1 道题的轻微波动**（近似检索的正常现象）。
+
+**效果**：
+
+| 查询 | 改之前 | 改之后 |
+|---|---|---|
+| "TextSplitter 有哪些"（半截类名） | ❌ 搜不到 | ✅ 前 3 条全是代码块 |
+| "ParentDocumentRetriever 怎么用"（全名） | ✅ | ✅ |
+| "混合检索是怎么做的"（纯中文） | ✅ | ✅ 未受噪音影响 |
+| **50 题回归** | MRR 0.903 | **MRR 0.903（持平）**，关键词 98%→100%，答案页 96%→98% |
+
+脚本：`scripts/add_identifier_tokenizer.py`（幂等，新环境建完索引后跑一次即可）；
+`es_api.py` 的 mapping 已同步，新建索引会自带这个分析器。
+
+查询侧：`rag_api.py` 的 `_identifier_clauses()`，被 `_word_search` 和 `_typed_search` 使用
+（用 `should` + `minimum_should_match: 1`，两个字段命中任一即可）。
+
 ---
 
 ## 六、风险与对策
