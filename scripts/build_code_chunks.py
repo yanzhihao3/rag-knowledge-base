@@ -157,7 +157,7 @@ def main():
     resp = es.delete_by_query(
         index="chunk_info",
         query={"bool": {"must": [{"term": {"document_id": args.document_id}},
-                                 {"term": {"chunk_type": "code"}}]}},
+                                 {"term": {"chunk_type.keyword": "code"}}]}},
         refresh=True,
     )
     print(f"  清理旧代码块: {resp.get('deleted', 0)} 条")

@@ -56,6 +56,7 @@ rag:
   rerank_top_k: 5
   retrieval_mode: "flat"     # flat / parent_child，见 config.yaml 说明
   parent_max_chars: 1200
+  image_ocr: true            # 见 config.yaml 说明
   use_embedding: true
   use_rerank: true
   use_rrf: true

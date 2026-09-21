@@ -96,6 +96,9 @@ def init_es():
                 'department_id': {'type': 'integer'},
                 'page_number': {'type': 'integer'},
                 'chunk_id': {'type': 'integer'},
+                # 显式声明成 keyword：第三路召回要用它做精确过滤，
+                # 动态映射会变成 text，term 查询会走分词器（不可靠）
+                'chunk_type': {'type': 'keyword'},
                 'chunk_content': {
                     'type': 'text',
                     'analyzer': 'ik_max_word',

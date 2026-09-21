@@ -334,6 +334,11 @@ class RAG:
         self.retrieval_mode = (os.environ.get("RAG_RETRIEVAL_MODE")
                                or config["rag"].get("retrieval_mode", "flat"))
         self.parent_max_chars = config["rag"].get("parent_max_chars", 1200)
+        # 是否提取"图片型的表格 / 代码"。这两类内容不在文本层里（实测那本书
+        # 251 张图占 20.9% 版面），只靠 pdfplumber 一个字都拿不到。
+        # 用的是本地 RapidOCR（纯 CPU、0 成本），但会把解析时间从 ~1 分钟拉到 ~10 分钟，
+        # 所以留个开关：本地调试时可以关掉。
+        self.use_image_ocr = config["rag"].get("image_ocr", True)
         self.chunk_candidate = config["rag"]["chunk_candidate"]
         # 最终进 Prompt 的条数：召回/重排阶段保留 chunk_candidate 条保证召回率，
         # 最后一步截断到 rerank_top_k 条，控制噪音与上下文长度。
@@ -481,6 +486,12 @@ class RAG:
             logger.info("[parse] document_id=%s 共 %d 页：解析 %d 页，跳过空页 %d 页",
                         document_id, len(pdf.pages), pages_parsed, pages_skipped)
 
+            # === 图片型内容（表格 / 代码）===
+            # 它们不在文本层里，extract_tables() 也拿不到，只能 OCR。
+            if self.use_image_ocr:
+                self._index_image_blocks(knowledge_id, document_id, owner_id,
+                                         department_id, file_path)
+
             document_data = {
                 "document_id": document_id,
                 "knowledge_id": knowledge_id,
@@ -501,6 +512,79 @@ class RAG:
 
     def _extract_word_content(self):
         pass
+
+    def _write_plain_block(self, document_id, knowledge_id, owner_id, department_id,
+                           page_number, block_id, text, chunk_type):
+        """写一条"独立成块"的记录（表格/代码用）。
+
+        和正文块的区别：chunk_id=0 且带 chunk_type 标记 —— 第三路召回
+        （`_typed_search`）就是靠这个字段把代码/表格单独召回的。
+        """
+        vector = self.get_embedding(text)
+        es.index(
+            index="chunk_info",
+            id=block_id,
+            document={
+                "document_id": document_id,
+                "knowledge_id": knowledge_id,
+                "owner_id": owner_id,
+                "department_id": department_id,
+                "page_number": page_number,
+                "chunk_id": 0,
+                "chunk_type": chunk_type,
+                "chunk_content": text,
+                "chunk_images": [],
+                "chunk_tables": [],
+                "embedding_vector": [float(x) for x in list(vector)],
+            },
+        )
+
+    def _index_image_blocks(self, knowledge_id, document_id, owner_id, department_id,
+                            file_path):
+        """把 PDF 里图片型的表格/代码 OCR 出来，作为独立块写入 ES。
+
+        为什么要单这一步：实测那本书 251 张图占 20.9% 版面，代码示例和表格全是图片，
+        `pdfplumber.extract_tables()` 全书 240 页抽到 0 张。不加这一步，用户问
+        "代码怎么写""表里有什么"时系统一个字都搜不到。
+
+        设计取舍：
+          · OCR 失败只记警告、不影响正文解析 —— 图片是"增量能力"，不能让整篇解析失败
+          · 块 id 用确定性拼法（表格按表号、代码按页+图序号），重灌时覆盖写，天然幂等
+          · 解析开头已经 delete_document_chunks 清过该文档所有块，所以不会残留旧的
+        """
+        try:
+            import pymupdf
+            import image_ocr
+        except ImportError as e:
+            logger.warning("[image_ocr] 依赖不可用，跳过图片内容提取: %s", e)
+            return
+
+        try:
+            doc = pymupdf.open(file_path)
+        except Exception:
+            logger.exception("[image_ocr] 打开 PDF 失败: %s", file_path)
+            return
+
+        try:
+            tables, codes = image_ocr.extract_image_blocks(doc, log=logger.info)
+        except Exception:
+            # OCR 引擎缺失/图片损坏都不该让整篇解析失败
+            logger.exception("[image_ocr] 图片内容提取失败（正文解析不受影响）")
+            return
+        finally:
+            doc.close()
+
+        for b in tables:
+            self._write_plain_block(document_id, knowledge_id, owner_id, department_id,
+                                    b["page"], f"doc_{document_id}_table_{b['key']}",
+                                    b["text"], "table")
+        for b in codes:
+            self._write_plain_block(document_id, knowledge_id, owner_id, department_id,
+                                    b["page"],
+                                    f"doc_{document_id}_code_{b['page']}_{b['idx']}",
+                                    b["text"], "code")
+        logger.info("[image_ocr] document_id=%s 表格块=%d 代码块=%d",
+                    document_id, len(tables), len(codes))
 
     @with_retry(max_retries=3, base_delay=2, no_retry=(DocumentParseError,))
     def extract_content(self, knowledge_id, document_id, title, file_type, file_path,
@@ -634,8 +718,10 @@ class RAG:
 
         注意：这一路不改动现有两路的任何行为，只是多一路，所以不影响原来的排序。
         """
+        # 用 .keyword 子字段：chunk_type 是动态映射出来的 text 类型，
+        # text 字段的 term 查询会走分词器（单看运气），keyword 才是精确匹配
         filters = [{"term": {"knowledge_id": knowledge_id}},
-                   {"terms": {"chunk_type": list(self._TYPED_CHUNK_TYPES)}}]
+                   {"terms": {"chunk_type.keyword": list(self._TYPED_CHUNK_TYPES)}}]
         if department_id is not None:
             filters.append({"term": {"department_id": department_id}})
         fields = ["chunk_id", "document_id", "knowledge_id", "page_number",

@@ -257,7 +257,7 @@ def main():
         resp = es.delete_by_query(
             index="chunk_info",
             query={"bool": {"must": [{"term": {"document_id": args.document_id}},
-                                     {"term": {"chunk_type": "table"}}]}},
+                                     {"term": {"chunk_type.keyword": "table"}}]}},
             refresh=True,
         )
         print(f"  清理旧表格块: {resp.get('deleted', 0)} 条")

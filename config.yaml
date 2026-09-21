@@ -65,6 +65,9 @@ rag:
   # 可用环境变量覆盖做 A/B：$env:RAG_RETRIEVAL_MODE='parent_child'
   retrieval_mode: "flat"
   parent_max_chars: 1200     # parent_child: 父块送进 Prompt 前截断到多少字
+  # 是否提取"图片型的表格/代码"：本地 RapidOCR，纯 CPU、0 成本，
+  # 但会把解析时间从约 1 分钟拉到约 10 分钟。本地调试可设 false。
+  image_ocr: true
   use_embedding: true
   use_rerank: true
   use_rrf: true
