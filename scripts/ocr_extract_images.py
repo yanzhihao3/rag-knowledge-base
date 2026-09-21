@@ -146,6 +146,8 @@ def main():
     parser.add_argument("--pdf", required=True)
     parser.add_argument("--pages", default=None, help="0 基页码，逗号分隔")
     parser.add_argument("--pick", type=int, default=0, help="自动均匀挑 N 张图")
+    parser.add_argument("--from-json", default=None,
+                        help="只处理 find_table_images.py 产出的 JSON 里列出的候选图")
     args = parser.parse_args()
 
     import fitz  # PyMuPDF
@@ -156,6 +158,12 @@ def main():
 
     if args.pages:
         targets = list(_iter_images(doc, [int(x) for x in args.pages.split(",")]))
+    elif args.from_json:
+        import json
+        with open(args.from_json, "r", encoding="utf-8") as f:
+            wanted = {tuple(x) for x in json.load(f)["unique_images"]}
+        targets = [t for t in _iter_images(doc, range(n_pages))
+                   if (t[0], t[1]) in wanted]
     else:
         n = args.pick or 10
         targets = _pick_images(doc, n, n_pages)
