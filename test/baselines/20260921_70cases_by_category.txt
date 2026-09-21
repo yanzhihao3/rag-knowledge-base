@@ -1,0 +1,307 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.20, pytest-9.0.2, pluggy-1.6.0 -- D:\miniconda3\envs\rag310\python.exe
+cachedir: .pytest_cache
+rootdir: D:\AILLM\04-rag-liangxi1
+configfile: pytest.ini
+plugins: anyio-4.13.0, langsmith-0.8.3, asyncio-1.3.0, dependency-0.6.1
+asyncio: mode=strict, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+
+Loading weights:   0%|          | 0/71 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 71/71 [00:00<00:00, 6774.86it/s]
+BertModel LOAD REPORT from: D:/AILLM/Week04/models/BAAI/bge-small-zh-v1.5/
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 201/201 [00:00<00:00, 5922.12it/s]
+XLMRobertaForSequenceClassification LOAD REPORT from: D:/AILLM/Week04/models/BAAI/bge-reranker-base/
+Key                             | Status     |  | 
+--------------------------------+------------+--+-
+roberta.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+collecting ... collected 6 items / 1 deselected / 5 selected
+
+test/benchmark_report.py::TestRecall::test_es_check 
+============================================================
+  RAG Benchmark 评测
+============================================================
+  知识库 ID:      2
+  测试用例数:     70
+  难度分布:       easy=19, medium=37, hard=14
+  Top-K:          5
+============================================================
+
+PASSED
+test/benchmark_report.py::TestRecall::test_recall_bm25 
+  BM25 关键词Top-5: 98.6%  答案块: 82.9%  仅子块: 68.6%  答案页: 82.9%  MRR@5: 0.755（子块 0.519 / 页 0.770）
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG框架是哪一年由哪家公司首先提出的
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG在推理过程中分为哪两个阶段
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  大模型为什么难以回答训练语料截止日期之后的问题
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG与模型微调相比，更适合什么样的场景
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG如何提高大模型回答的可解释性
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  使用私有数据构建RAG为什么能降低数据泄露风险
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG的工作流程包括哪三个主要阶段
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量存储库适合存储什么类型的数据
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  图数据库以什么形式存储数据并如何检索
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG系统有哪些优点
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  为什么说RAG系统极其依赖检索模块的质量
+    [hard] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  RETRO论文证明了什么结论
+    [medium] 关键词[FAIL] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG有哪些常见的使用场景
+    [easy] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  Transformer模型首次提出是在哪篇论文中
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  Transformer由哪几大部分构成
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  词向量模型中CBOW和Skip-gram两种模式分别预测什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  ELMo如何解决一词多义问题
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  BERT的全称是什么，其结构有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=5  子块[OK] 页[OK]  自动编码器由哪两部分组成，核心目标是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  稠密向量检索模型和稀疏向量检索模型各擅长什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  理想的文本向量空间应该具有哪两个特点
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG场景下的文本召回通常是对称检索还是非对称检索
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  计算文本向量相似度最常用的两种度量方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  SimCSE使用什么训练方式训练文本向量化模型
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  什么叫做难负例，加入难负例有什么作用
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  CoSENT相比SBERT效果更好的原因是什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  SGPT基于什么模型架构，句向量是如何计算的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  TF-IDF解决了朴素词袋模型的哪两个缺点
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  BM25相比TF-IDF有哪些改进
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  为什么重排序模型（交叉编码器）只用于二次精排而不是直接召回
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG场景下为什么要在提示词中设置兜底回答方式
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Lost in the Middle论文证明了什么结论
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  文本切块过长会带来什么问题
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  LangChain的RecursiveCharacterTextSplitter是如何切块的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量数据库通常集成了哪些高效向量检索算法
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Faiss的精确检索有什么特点
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  乘积量化是如何降低向量存储成本的
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  短文本全局信息增强常用的三种方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  父文本检索解决了召回和输入大模型内容之间的什么矛盾
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  HyDE方法的核心思路是什么
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  多轮对话场景中为什么要先对历史对话进行总结再召回
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RRF倒数排序融合算法是如何给候选文本打分的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  召回环节效果评估常用的两个指标是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAGAS评估框架主要关注哪三个方面
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LoRA参数高效微调的原理是什么
+    [medium] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  基础RAG系统在检索方面存在哪些问题
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  先进RAG系统的优化措施可以归纳为哪几个方面
+    [hard] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  大模型主导的RAG系统中Agent是如何工作的
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain的两大核心概念是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  基于GPT-4V的多模态RAG系统如何处理PDF文档
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表1-1 里 RAG 和模型微调各自的挑战是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表1-2 里 RETRO 模型的参数量和知识库大小分别是多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  共现概率矩阵里，单词i和k相关时比值的取值有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表2-2 里 LLaMA 预训练数据中 CommonCrawl 占比多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-1 里 LangChain 提供了哪些特殊文本切块方法
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-2 里 METRIC_INNER_PRODUCT 对应哪种距离
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-3 里混合精度训练时 FP32 二阶矩占多少显存
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-4 里 RAGAS 评测的“是否支持”指标输入和输出是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表7-1 里 LangChain 的 SystemMessage 有什么作用
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表7-2 里哪个召回器的作用是小块文本向量当作索引、返回大块文本
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain 里怎么用 NLTK 做文本切分
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  怎么用 Faiss 建立向量库并做相似度检索
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  召回内容上下文扩充的代码怎么写
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  LangChain 怎么实现 HyDE 方法
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  CBOW 模型的网络结构代码怎么写
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  CBOW 训练时优化器选择的是什么
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  位置编码的代码怎么实现
+    [hard] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  怎么自定义 Agent 的输出解析器
+    [hard] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  怎么用代码把 PDF 里的图片提取出来
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  提示词模板的示例代码怎么写
+PASSED
+test/benchmark_report.py::TestRecall::test_recall_vector 
+  Vector 关键词Top-5: 97.1%  答案块: 82.9%  仅子块: 64.3%  答案页: 84.3%  MRR@5: 0.687（子块 0.416 / 页 0.699）
+    [easy] 关键词[OK] 答案块[OK] rank=4  子块[FAIL] 页[OK]  RAG框架是哪一年由哪家公司首先提出的
+    [easy] 关键词[OK] 答案块[OK] rank=5  子块[OK] 页[OK]  RAG在推理过程中分为哪两个阶段
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  大模型为什么难以回答训练语料截止日期之后的问题
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG与模型微调相比，更适合什么样的场景
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  RAG如何提高大模型回答的可解释性
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  使用私有数据构建RAG为什么能降低数据泄露风险
+    [easy] 关键词[OK] 答案块[OK] rank=4  子块[OK] 页[OK]  RAG的工作流程包括哪三个主要阶段
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量存储库适合存储什么类型的数据
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  图数据库以什么形式存储数据并如何检索
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG系统有哪些优点
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[OK]  为什么说RAG系统极其依赖检索模块的质量
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RETRO论文证明了什么结论
+    [medium] 关键词[FAIL] 答案块[OK] rank=2  子块[OK] 页[OK]  RAG有哪些常见的使用场景
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Transformer模型首次提出是在哪篇论文中
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Transformer由哪几大部分构成
+    [medium] 关键词[OK] 答案块[OK] rank=5  子块[FAIL] 页[OK]  词向量模型中CBOW和Skip-gram两种模式分别预测什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  ELMo如何解决一词多义问题
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  BERT的全称是什么，其结构有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  自动编码器由哪两部分组成，核心目标是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  稠密向量检索模型和稀疏向量检索模型各擅长什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  理想的文本向量空间应该具有哪两个特点
+    [hard] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  RAG场景下的文本召回通常是对称检索还是非对称检索
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  计算文本向量相似度最常用的两种度量方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  SimCSE使用什么训练方式训练文本向量化模型
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  什么叫做难负例，加入难负例有什么作用
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  CoSENT相比SBERT效果更好的原因是什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  SGPT基于什么模型架构，句向量是如何计算的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  TF-IDF解决了朴素词袋模型的哪两个缺点
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  BM25相比TF-IDF有哪些改进
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  为什么重排序模型（交叉编码器）只用于二次精排而不是直接召回
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG场景下为什么要在提示词中设置兜底回答方式
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Lost in the Middle论文证明了什么结论
+    [medium] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  文本切块过长会带来什么问题
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain的RecursiveCharacterTextSplitter是如何切块的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量数据库通常集成了哪些高效向量检索算法
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Faiss的精确检索有什么特点
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  乘积量化是如何降低向量存储成本的
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  短文本全局信息增强常用的三种方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  父文本检索解决了召回和输入大模型内容之间的什么矛盾
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  HyDE方法的核心思路是什么
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  多轮对话场景中为什么要先对历史对话进行总结再召回
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RRF倒数排序融合算法是如何给候选文本打分的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  召回环节效果评估常用的两个指标是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAGAS评估框架主要关注哪三个方面
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LoRA参数高效微调的原理是什么
+    [medium] 关键词[FAIL] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  基础RAG系统在检索方面存在哪些问题
+    [medium] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  先进RAG系统的优化措施可以归纳为哪几个方面
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  大模型主导的RAG系统中Agent是如何工作的
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain的两大核心概念是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  基于GPT-4V的多模态RAG系统如何处理PDF文档
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表1-1 里 RAG 和模型微调各自的挑战是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表1-2 里 RETRO 模型的参数量和知识库大小分别是多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  共现概率矩阵里，单词i和k相关时比值的取值有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表2-2 里 LLaMA 预训练数据中 CommonCrawl 占比多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-1 里 LangChain 提供了哪些特殊文本切块方法
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-2 里 METRIC_INNER_PRODUCT 对应哪种距离
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  表4-3 里混合精度训练时 FP32 二阶矩占多少显存
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-4 里 RAGAS 评测的“是否支持”指标输入和输出是什么
+    [easy] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  表7-1 里 LangChain 的 SystemMessage 有什么作用
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表7-2 里哪个召回器的作用是小块文本向量当作索引、返回大块文本
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain 里怎么用 NLTK 做文本切分
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  怎么用 Faiss 建立向量库并做相似度检索
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  召回内容上下文扩充的代码怎么写
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  LangChain 怎么实现 HyDE 方法
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  CBOW 模型的网络结构代码怎么写
+    [easy] 关键词[OK] 答案块[OK] rank=5  子块[FAIL] 页[OK]  CBOW 训练时优化器选择的是什么
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  位置编码的代码怎么实现
+    [hard] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  怎么自定义 Agent 的输出解析器
+    [hard] 关键词[OK] 答案块[OK] rank=3  子块[FAIL] 页[OK]  怎么用代码把 PDF 里的图片提取出来
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  提示词模板的示例代码怎么写
+PASSED
+test/benchmark_report.py::TestRecall::test_recall_fusion 
+  Fusion 关键词Top-5: 98.6%  答案块: 92.9%  仅子块: 75.7%  答案页: 92.9%  MRR@5: 0.857（子块 0.565 / 页 0.871）
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG框架是哪一年由哪家公司首先提出的
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG在推理过程中分为哪两个阶段
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  大模型为什么难以回答训练语料截止日期之后的问题
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG与模型微调相比，更适合什么样的场景
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG如何提高大模型回答的可解释性
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  使用私有数据构建RAG为什么能降低数据泄露风险
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG的工作流程包括哪三个主要阶段
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量存储库适合存储什么类型的数据
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  图数据库以什么形式存储数据并如何检索
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  RAG系统有哪些优点
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  为什么说RAG系统极其依赖检索模块的质量
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RETRO论文证明了什么结论
+    [medium] 关键词[FAIL] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG有哪些常见的使用场景
+    [easy] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  Transformer模型首次提出是在哪篇论文中
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Transformer由哪几大部分构成
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  词向量模型中CBOW和Skip-gram两种模式分别预测什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  ELMo如何解决一词多义问题
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  BERT的全称是什么，其结构有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  自动编码器由哪两部分组成，核心目标是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  稠密向量检索模型和稀疏向量检索模型各擅长什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  理想的文本向量空间应该具有哪两个特点
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAG场景下的文本召回通常是对称检索还是非对称检索
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  计算文本向量相似度最常用的两种度量方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  SimCSE使用什么训练方式训练文本向量化模型
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  什么叫做难负例，加入难负例有什么作用
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  CoSENT相比SBERT效果更好的原因是什么
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  SGPT基于什么模型架构，句向量是如何计算的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  TF-IDF解决了朴素词袋模型的哪两个缺点
+    [medium] 关键词[OK] 答案块[OK] rank=3  子块[OK] 页[OK]  BM25相比TF-IDF有哪些改进
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  为什么重排序模型（交叉编码器）只用于二次精排而不是直接召回
+    [easy] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  RAG场景下为什么要在提示词中设置兜底回答方式
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Lost in the Middle论文证明了什么结论
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  文本切块过长会带来什么问题
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain的RecursiveCharacterTextSplitter是如何切块的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  向量数据库通常集成了哪些高效向量检索算法
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  Faiss的精确检索有什么特点
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  乘积量化是如何降低向量存储成本的
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  短文本全局信息增强常用的三种方式是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  父文本检索解决了召回和输入大模型内容之间的什么矛盾
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  HyDE方法的核心思路是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  多轮对话场景中为什么要先对历史对话进行总结再召回
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RRF倒数排序融合算法是如何给候选文本打分的
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  召回环节效果评估常用的两个指标是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  RAGAS评估框架主要关注哪三个方面
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LoRA参数高效微调的原理是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  基础RAG系统在检索方面存在哪些问题
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  先进RAG系统的优化措施可以归纳为哪几个方面
+    [hard] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  大模型主导的RAG系统中Agent是如何工作的
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain的两大核心概念是什么
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  基于GPT-4V的多模态RAG系统如何处理PDF文档
+    [medium] 关键词[OK] 答案块[OK] rank=3  子块[FAIL] 页[OK]  表1-1 里 RAG 和模型微调各自的挑战是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表1-2 里 RETRO 模型的参数量和知识库大小分别是多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  共现概率矩阵里，单词i和k相关时比值的取值有什么特点
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表2-2 里 LLaMA 预训练数据中 CommonCrawl 占比多少
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-1 里 LangChain 提供了哪些特殊文本切块方法
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-2 里 METRIC_INNER_PRODUCT 对应哪种距离
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[OK] 页[OK]  表4-3 里混合精度训练时 FP32 二阶矩占多少显存
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  表4-4 里 RAGAS 评测的“是否支持”指标输入和输出是什么
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表7-1 里 LangChain 的 SystemMessage 有什么作用
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  表7-2 里哪个召回器的作用是小块文本向量当作索引、返回大块文本
+    [easy] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  LangChain 里怎么用 NLTK 做文本切分
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  怎么用 Faiss 建立向量库并做相似度检索
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[OK] 页[OK]  召回内容上下文扩充的代码怎么写
+    [medium] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  LangChain 怎么实现 HyDE 方法
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  CBOW 模型的网络结构代码怎么写
+    [easy] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  CBOW 训练时优化器选择的是什么
+    [medium] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  位置编码的代码怎么实现
+    [hard] 关键词[OK] 答案块[FAIL] rank=None  子块[FAIL] 页[FAIL]  怎么自定义 Agent 的输出解析器
+    [hard] 关键词[OK] 答案块[OK] rank=1  子块[FAIL] 页[OK]  怎么用代码把 PDF 里的图片提取出来
+    [medium] 关键词[OK] 答案块[OK] rank=2  子块[FAIL] 页[OK]  提示词模板的示例代码怎么写
+PASSED
+test/benchmark_report.py::TestRecall::test_recall_summary 
+============================================================
+  Top-5 召回率对比汇总
+============================================================
+
+  Method            关键词      答案块      仅子块      答案页    MRR@5
+  --------------------------------------------------------
+  BM25            98.6%    82.9%    68.6%    82.9%    0.755
+  Vector          97.1%    82.9%    64.3%    84.3%    0.687
+  Fusion(RRF)     98.6%    92.9%    75.7%    92.9%    0.857
+
+  答案块命中 融合 vs BM25: +10.0%   融合 vs Vector: +10.0%
+  答案页命中 融合 vs BM25: +10.0%   融合 vs Vector: +8.6%
+  MRR@5     融合 vs BM25: +0.102   融合 vs Vector: +0.170
+
+  按类别拆开（以 Fusion(RRF) 为准）
+  类别         题数      关键词      答案块    MRR@5
+  ------------------------------------------
+  概念题        50    98.0%    96.0%    0.903
+  表格题        10   100.0%   100.0%    0.883
+  代码题        10   100.0%    70.0%    0.600
+============================================================
+
+PASSED
+
+============================== warnings summary ===============================
+test/benchmark_report.py: 280 warnings
+  D:\AILLM\04-rag-liangxi1\rag_api.py:662: DeprecationWarning: Received 'fields' via a specific parameter in the presence of a 'body' parameter, which is deprecated and will be removed in a future version. Instead, use only 'body' or only specific parameters.
+    return es.search(index="chunk_info",
+
+test/benchmark_report.py: 280 warnings
+  D:\AILLM\04-rag-liangxi1\rag_api.py:662: DeprecationWarning: Received 'source' via a specific parameter in the presence of a 'body' parameter, which is deprecated and will be removed in a future version. Instead, use only 'body' or only specific parameters.
+    return es.search(index="chunk_info",
+
+test/benchmark_report.py: 140 warnings
+  D:\AILLM\04-rag-liangxi1\rag_api.py:730: DeprecationWarning: Received 'fields' via a specific parameter in the presence of a 'body' parameter, which is deprecated and will be removed in a future version. Instead, use only 'body' or only specific parameters.
+    word_resp = es.search(
+
+test/benchmark_report.py: 140 warnings
+  D:\AILLM\04-rag-liangxi1\rag_api.py:730: DeprecationWarning: Received 'source' via a specific parameter in the presence of a 'body' parameter, which is deprecated and will be removed in a future version. Instead, use only 'body' or only specific parameters.
+    word_resp = es.search(
+
+..\..\miniconda3\envs\rag310\lib\site-packages\_pytest\cacheprovider.py:475
+  D:\miniconda3\envs\rag310\lib\site-packages\_pytest\cacheprovider.py:475: PytestCacheWarning: could not create cache path D:\AILLM\04-rag-liangxi1\.pytest_cache\v\cache\nodeids: [WinError 5] 拒绝访问。: 'D:\\AILLM\\04-rag-liangxi1\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========== 5 passed, 1 deselected, 841 warnings in 574.97s (0:09:34) ==========

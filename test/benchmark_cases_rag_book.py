@@ -368,4 +368,172 @@ BENCHMARK_CASES = [
         "expected_points": ["图片文本分离", "多模态向量存储", "统一向量空间生成"],
         "difficulty": "medium",
     },
+
+    # ================= 表格类问题（答案在【图片型表格】里）=================
+    # 这一组是 2026-09 补的：原来的 50 题全是正文概念题，测不出表格/代码能力
+    # （所有 answer_terms 都能在正文里找到）。加上这两组后，评测集才能反映
+    # "面向开发者的技术文档助手"这个场景——它要回答"表里有什么"和"代码怎么写"。
+    {
+        "query": "表1-1 里 RAG 和模型微调各自的挑战是什么",
+        "relevant_keywords": ["表1-1", "挑战", "召回系统", "过拟合"],
+        "answer_terms": ["可靠的召回系统", "过拟合"],
+        "expected_points": ["RAG需要可靠的召回系统", "微调在数据不足时有风险"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "表1-2 里 RETRO 模型的参数量和知识库大小分别是多少",
+        "relevant_keywords": ["RETRO", "70亿", "2万亿"],
+        "answer_terms": ["RETRO", "2万亿"],
+        "expected_points": ["70亿参数", "2万亿知识库"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "共现概率矩阵里，单词i和k相关时比值的取值有什么特点",
+        "relevant_keywords": ["共现概率", "趋近于1", "相关"],
+        "answer_terms": ["趋近于1"],
+        "expected_points": ["趋近于1", "相关时很大或不相关时很小"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "表2-2 里 LLaMA 预训练数据中 CommonCrawl 占比多少",
+        "relevant_keywords": ["CommonCrawl", "67.0%", "数据集"],
+        "answer_terms": ["CommonCrawl", "67.0%"],
+        "expected_points": ["67.0%", "3.3TB"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "表4-1 里 LangChain 提供了哪些特殊文本切块方法",
+        "relevant_keywords": ["特殊文本切块", "Markdown", "LaTeX", "HTML"],
+        "answer_terms": ["MarkdownTextSplitter", "HTMLHeaderTextSplitter"],
+        "expected_points": ["PythonCodeTextSplitter", "MarkdownTextSplitter",
+                            "LatexTextSplitter", "HTMLHeaderTextSplitter"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "表4-2 里 METRIC_INNER_PRODUCT 对应哪种距离",
+        "relevant_keywords": ["METRIC_INNER_PRODUCT", "内积", "距离"],
+        "answer_terms": ["METRIC_INNER_PRODUCT"],
+        "expected_points": ["内积"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "表4-3 里混合精度训练时 FP32 二阶矩占多少显存",
+        "relevant_keywords": ["FP32", "二阶矩", "显存"],
+        "answer_terms": ["FP32二阶矩", "24GB"],
+        "expected_points": ["24GB"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "表4-4 里 RAGAS 评测的“是否支持”指标输入和输出是什么",
+        "relevant_keywords": ["是否支持", "完全支持", "RAGAS"],
+        "answer_terms": ["是否支持", "完全支持"],
+        "expected_points": ["输入是x、d、y", "输出是完全支持/部分支持/不支持"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "表7-1 里 LangChain 的 SystemMessage 有什么作用",
+        "relevant_keywords": ["SystemMessage", "系统消息", "模型如何表现"],
+        "answer_terms": ["SystemMessage", "规定模型如何表现"],
+        "expected_points": ["系统消息", "规定模型如何表现"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "表7-2 里哪个召回器的作用是小块文本向量当作索引、返回大块文本",
+        "relevant_keywords": ["召回器", "小块文本", "大块文本"],
+        "answer_terms": ["ParentDocumentRetriever"],
+        "expected_points": ["ParentDocumentRetriever", "小块检索大块返回"],
+        "difficulty": "medium",
+    },
+
+    # ================= 代码类问题（答案在【图片型代码】里）=================
+    {
+        "query": "LangChain 里怎么用 NLTK 做文本切分",
+        "relevant_keywords": ["NLTK", "NLTKTextSplitter", "文本切分"],
+        "answer_terms": ["NLTKTextSplitter"],
+        "expected_points": ["NLTKTextSplitter", "split_text"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "怎么用 Faiss 建立向量库并做相似度检索",
+        "relevant_keywords": ["FAISS", "相似度", "检索"],
+        "answer_terms": ["similarity_search_with_score"],
+        "expected_points": ["FAISS.from_texts", "similarity_search_with_score"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "召回内容上下文扩充的代码怎么写",
+        "relevant_keywords": ["ParentDocumentRetriever", "parent_splitter", "child_splitter"],
+        "answer_terms": ["ParentDocumentRetriever"],
+        "expected_points": ["ParentDocumentRetriever", "parent_splitter", "child_splitter"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "LangChain 怎么实现 HyDE 方法",
+        "relevant_keywords": ["HyDE", "HypotheticalDocumentEmbedder"],
+        "answer_terms": ["HypotheticalDocumentEmbedder"],
+        "expected_points": ["HypotheticalDocumentEmbedder"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "CBOW 模型的网络结构代码怎么写",
+        "relevant_keywords": ["CBOW", "nn.Embedding", "词向量"],
+        "answer_terms": ["nn.Embedding"],
+        "expected_points": ["嵌入层", "线性层", "前向传播"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "CBOW 训练时优化器选择的是什么",
+        "relevant_keywords": ["优化器", "SGD", "随机梯度下降"],
+        "answer_terms": ["torch.optim.SGD"],
+        "expected_points": ["随机梯度下降", "SGD"],
+        "difficulty": "easy",
+    },
+    {
+        "query": "位置编码的代码怎么实现",
+        "relevant_keywords": ["位置编码", "getPositionEncoding"],
+        "answer_terms": ["getPositionEncoding"],
+        "expected_points": ["位置编码矩阵", "正弦函数"],
+        "difficulty": "medium",
+    },
+    {
+        "query": "怎么自定义 Agent 的输出解析器",
+        "relevant_keywords": ["CustomOutputParser", "AgentFinish", "解析"],
+        "answer_terms": ["CustomOutputParser"],
+        "expected_points": ["自定义解析器类", "AgentFinish", "Final Answer"],
+        "difficulty": "hard",
+    },
+    {
+        "query": "怎么用代码把 PDF 里的图片提取出来",
+        "relevant_keywords": ["load_pdf", "fitz", "图片"],
+        "answer_terms": ["load_pdf"],
+        "expected_points": ["PyMuPDF/fitz", "逐页提取图片", "保存元数据"],
+        "difficulty": "hard",
+    },
+    {
+        "query": "提示词模板的示例代码怎么写",
+        "relevant_keywords": ["question_answering", "prompt", "示例代码"],
+        "answer_terms": ["question_answering"],
+        "expected_points": ["prompt模板", "上下文与问题占位符"],
+        "difficulty": "medium",
+    },
 ]
+
+
+# ============================================================
+# 用例分类（按场景配比）
+# ============================================================
+# 前 50 条是正文概念题（原本就有）；后 20 条是 2026-09 补的"图片类"题：
+#   索引 50-59 = 表格题（答案在图片型表格里）
+#   索引 60-69 = 代码题（答案在图片型代码里）
+# 为什么按索引划分而不是给每条加字段：改动小、一眼能看出顺序，但**新增用例必须追加在末尾**。
+_TABLE_RANGE = range(50, 60)
+_CODE_RANGE = range(60, 70)
+
+
+def case_category(index: int) -> str:
+    """返回用例类别：text / table / code。"""
+    if index in _TABLE_RANGE:
+        return "table"
+    if index in _CODE_RANGE:
+        return "code"
+    return "text"

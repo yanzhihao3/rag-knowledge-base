@@ -45,7 +45,7 @@ _FAIL = "[FAIL]"
 # ============================================================
 # 评测用例：基于《大模型RAG实战》标注的 50 条（数据见 benchmark_cases_rag_book.py）
 # 难度分级：easy - 关键词可直接匹配；medium - 需要语义理解；hard - 需要深度细节
-from test.benchmark_cases_rag_book import BENCHMARK_CASES
+from test.benchmark_cases_rag_book import BENCHMARK_CASES, case_category
 
 # 知识库 ID：默认指向当前 MySQL / ES 里实际存在的那个知识库（2026-09 是 2）。
 # 换知识库时用环境变量覆盖，不要改代码：
@@ -335,6 +335,23 @@ class TestRecall:
               f"融合 vs Vector: {(f['page']-v['page'])*100:+.1f}%")
         print(f"  MRR@5     融合 vs BM25: {f['mrr']-b['mrr']:+.3f}   "
               f"融合 vs Vector: {f['mrr']-v['mrr']:+.3f}")
+
+        # 按用例类别拆开：概念题（正文）/ 表格题 / 代码题。
+        # 不拆开的话，50 道概念题的分数会把 20 道图片类题的效果淹没 ——
+        # 而表格/代码正是这个场景的核心能力，必须单独看。
+        print(f"\n  按类别拆开（以 Fusion(RRF) 为准）")
+        print(f"  {'类别':<8} {'题数':>4} {'关键词':>8} {'答案块':>8} {'MRR@5':>8}")
+        print(f"  {'-'*42}")
+        f_details = f["details"]
+        for cat, name in (("text", "概念题"), ("table", "表格题"), ("code", "代码题")):
+            idx = [i for i in range(len(BENCHMARK_CASES)) if case_category(i) == cat]
+            if not idx:
+                continue
+            n = len(idx)
+            kw = sum(1 for i in idx if f_details[i][2]) / n
+            st = sum(1 for i in idx if f_details[i][3]) / n
+            mrr = sum(1.0 / f_details[i][6] for i in idx if f_details[i][6]) / n
+            print(f"  {name:<8} {n:>4} {kw*100:>7.1f}% {st*100:>7.1f}% {mrr:>8.3f}")
         print(f"{'='*60}\n")
 
 
