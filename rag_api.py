@@ -17,6 +17,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+class DocumentParseError(Exception):
+    """文档本身无法解析（不是临时故障），重试没有意义。
+
+    典型场景：上传的是扫描件 / 纯图片 PDF，没有文本层。
+    这种情况必须明确失败，绝不能静默上报"处理成功" —— 用户看到成功却一个字
+    都搜不到，比直接报错糟糕得多。
+    """
+
+
 #project_root = os.path.dirname(os.path.abspath(__file__))
 #config_path = os.path.join(project_root, 'config.yaml')
 
@@ -333,6 +343,8 @@ class RAG:
 
             abstract = ""
             prev_page_tail = ""  # 跨页断句：保存上页末尾的不完整句子
+            pages_parsed = 0     # 真正写出内容的页数
+            pages_skipped = 0    # 无文字且无表格、被跳过的页数
 
             for page_number in range(len(pdf.pages)):
                 page = pdf.pages[page_number]
@@ -353,9 +365,10 @@ class RAG:
                                 table_content += "\n[表格]\n" + "\n".join(table_rows) + "\n[/表格]\n"
 
                 # === 2. 提取文本 ===
-                current_page_text = page.extract_text()
-                if page_number <= 3:
-                    abstract = abstract + '\n' + current_page_text
+                # 纯图页上 extract_text() 会返回 None，必须兜底成空串，
+                # 否则下面的字符串拼接会抛 TypeError（这是另一种"静默"的来源：
+                # 报错信息里看不出是"没有文本层"）。
+                current_page_text = page.extract_text() or ""
 
                 # === 3. 跨页断句处理 ===
                 if prev_page_tail:
@@ -373,6 +386,20 @@ class RAG:
                 #   1. 跨行的词在页级文本里匹配不上 → 评测的"答案页"口径会低估；
                 #   2. parent_child 把整页送进 Prompt 时，LLM 看到的是断行文本。
                 page_text_clean = "\n".join(join_visual_lines(current_page_text))
+
+                # === 4. 空页守卫 ===
+                # 这一页既没有文本层、也没抽到表格 → 直接跳过，不写空向量。
+                # 空 chunk_content 的记录照样会进索引、被 kNN 召回，纯属噪音
+                # （修复前这本书里有 14 条这样的记录）。
+                if not page_text_clean.strip() and not table_content.strip():
+                    pages_skipped += 1
+                    logger.debug("[parse] 跳过无内容页 document_id=%s page=%s",
+                                 document_id, page_number)
+                    continue
+
+                pages_parsed += 1
+                if page_number <= 3:
+                    abstract = abstract + '\n' + page_text_clean
 
                 # 整页向量（包含表格内容）
                 page_text_with_table = page_text_clean + table_content
@@ -423,6 +450,18 @@ class RAG:
                         document=page_data,
                     )
 
+            # === 全篇守卫 ===
+            # 一页有效内容都没有 → 这份 PDF 没有文本层（多半是扫描件）。
+            # 必须明确失败：静默"成功"会让用户以为处理好了，实际一个字都搜不到。
+            if pages_parsed == 0:
+                raise DocumentParseError(
+                    f"PDF 无可提取的文本层（共 {len(pdf.pages)} 页，"
+                    f"{pages_skipped} 页既无文字也无表格）。"
+                    f"可能是扫描件或纯图片 PDF：请先做 OCR，或换一份带文本层的文件。"
+                )
+            logger.info("[parse] document_id=%s 共 %d 页：解析 %d 页，跳过空页 %d 页",
+                        document_id, len(pdf.pages), pages_parsed, pages_skipped)
+
             document_data = {
                 "document_id": document_id,
                 "knowledge_id": knowledge_id,
@@ -444,7 +483,7 @@ class RAG:
     def _extract_word_content(self):
         pass
 
-    @with_retry(max_retries=3, base_delay=2)
+    @with_retry(max_retries=3, base_delay=2, no_retry=(DocumentParseError,))
     def extract_content(self, knowledge_id, document_id, title, file_type, file_path,
                         owner_id: int = 0, department_id: int = 0):
         # 类型白名单：只处理明确支持的 PDF；Word/未知类型直接置为失败，
@@ -452,8 +491,11 @@ class RAG:
         # 判断依据优先看服务端可控的文件扩展名，不轻信客户端自报的 content_type。
         is_pdf = ("pdf" in (file_type or "")) or str(file_path or "").lower().endswith(".pdf")
         if not is_pdf:
-            logger.warning("不支持的文件类型，文档解析失败: document_id=%s file_type=%s", document_id, file_type)
-            return
+            # 原来是 return（等于静默成功：任务照样被标成 success），
+            # 现在抛出来，让 task 表如实记成 failure。
+            raise DocumentParseError(
+                f"不支持的文件类型: {file_type or '未知'}（当前只支持 PDF）"
+            )
 
         try:
             self._extract_pdf_content(knowledge_id, document_id, title, file_path,
@@ -554,6 +596,52 @@ class RAG:
             return value[0] if value else None
         return value
 
+    # 结构化内容的类型标记。这类内容在 BM25 里天然吃亏（正文块一页 600-800 字、
+    # 词频高；代码块大半是符号、中文匹配词少），所以给它们单独开一路召回。
+    _TYPED_CHUNK_TYPES = ("code", "table")
+
+    def _typed_search(self, rewritten_query, embedding_vector, knowledge_id,
+                      department_id: Optional[int] = None):
+        """第三路：只在代码/表格这类结构化内容里召回，返回合并去重后的有序命中列表。
+
+        为什么需要单独一路：正文块和代码块放同一个池子里比 BM25，代码永远被压制；
+        而用户问"代码怎么写"时，召回正文块等于没给代码（正文只会说
+        "代码如下所示"）。分开召回再 RRF 融合，保证每种内容都有机会进上下文 ——
+        这也是 RAGFlow / EnsembleRetriever 这类多路召回的标准做法。
+
+        注意：这一路不改动现有两路的任何行为，只是多一路，所以不影响原来的排序。
+        """
+        filters = [{"term": {"knowledge_id": knowledge_id}},
+                   {"terms": {"chunk_type": list(self._TYPED_CHUNK_TYPES)}}]
+        if department_id is not None:
+            filters.append({"term": {"department_id": department_id}})
+        fields = ["chunk_id", "document_id", "knowledge_id", "page_number",
+                  "chunk_content", "chunk_tables", "chunk_type"]
+
+        word_resp = es.search(
+            index="chunk_info",
+            body={"query": {"bool": {"must": [{"match": {"chunk_content": rewritten_query}}],
+                                     "filter": filters}},
+                  "size": 50},
+            fields=fields, source=False,
+        )
+        knn_query = {
+            "field": "embedding_vector",
+            "query_vector": [float(x) for x in list(embedding_vector)],
+            "k": 50,
+            "num_candidates": 100,
+            "filter": {"bool": {"must": filters}},
+        }
+        vec_resp = es.search(index="chunk_info", knn=knn_query, fields=fields, source=False)
+
+        merged, seen = [], set()
+        for h in list(word_resp["hits"]["hits"]) + list(vec_resp["hits"]["hits"]):
+            if h["_id"] in seen:
+                continue
+            seen.add(h["_id"])
+            merged.append(h)
+        return merged[:50]
+
     def _expand_to_parents(self, sorted_dict, search_id2record):
         """父子块检索的第 2、3 步：按父块（页）聚合子块分数，再把父块正文捞回来。
 
@@ -626,12 +714,15 @@ class RAG:
         embedding_vector = self.get_embedding(rewritten_query)
         t2 = time.monotonic()
 
-        # 双路并行召回
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        # 三路并行召回：BM25 / 向量 / 只查代码表格的"结构化内容"路
+        with ThreadPoolExecutor(max_workers=3) as executor:
             word_future = executor.submit(self._word_search, rewritten_query, knowledge_id, department_id)
             vector_future = executor.submit(self._vector_search, embedding_vector, knowledge_id, department_id)
+            typed_future = executor.submit(self._typed_search, rewritten_query, embedding_vector,
+                                           knowledge_id, department_id)
             word_search_response = word_future.result()
             vector_search_response = vector_future.result()
+            typed_hits = typed_future.result()
         # ===== RRF融合 =====
         k = 60
         fusion_score = {}
@@ -654,6 +745,17 @@ class RAG:
                 fusion_score[_id] += 1 / (idx + k)
             if _id not in search_id2record:
                 search_id2record[_id] = {**record["fields"], "_id": _id}  # 附带 _id，便于评估时定位答案块
+
+        # 第三路：结构化内容（代码/表格）。保证这两类内容一定有机会进候选，
+        # 不会被正文块用词频压死。
+        for idx, record in enumerate(typed_hits):
+            _id = record["_id"]
+            if _id not in fusion_score:
+                fusion_score[_id] = 1 / (idx + k)
+            else:
+                fusion_score[_id] += 1 / (idx + k)
+            if _id not in search_id2record:
+                search_id2record[_id] = {**record["fields"], "_id": _id}
 
         # 按总分排序，取前 chunk_candidate 条（config 里是 10 条）
         sorted_dict = sorted(fusion_score.items(), key=lambda kv: kv[1], reverse=True)

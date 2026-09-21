@@ -18,11 +18,14 @@ def safe_remove_file(file_path: str) -> None:
         logger.warning("物理文件删除失败，需手动清理: %s", file_path)
 
 
-def with_retry(max_retries=3, base_delay=1):
+def with_retry(max_retries=3, base_delay=1, no_retry=()):
     """
     指数退避重试装饰器
     :param max_retries: 最大重试次数
     :param base_delay: 基础延迟秒数，重试间隔 = base_delay * 2^retry_count
+    :param no_retry: 这些异常直接抛出、不重试。给"确定性失败"用 ——
+                     比如"这份 PDF 没有文本层"，重试多少次结果都一样，
+                     只会白等几秒并刷出误导性的重试日志。
     """
     def decorator(func):
         @wraps(func)
@@ -32,6 +35,9 @@ def with_retry(max_retries=3, base_delay=1):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
+                    if no_retry and isinstance(e, tuple(no_retry)):
+                        logger.warning("[不重试] %s: %s", func.__name__, e)
+                        raise
                     last_exception = e
                     if retry_count < max_retries - 1:
                         delay = base_delay * (2 ** retry_count)
@@ -42,4 +48,3 @@ def with_retry(max_retries=3, base_delay=1):
             raise last_exception
         return wrapper
     return decorator
-
