@@ -67,7 +67,7 @@ def get_ocr():
         _OCR_ENGINE = RapidOCR()
     return _OCR_ENGINE
 
-
+# 新字的 y 和当前行的平均 y 差不超过"行高的 0.6 倍"，就算同一行。
 def ocr_rows(engine, img_bytes, tmp_path=None):
     """OCR 一张图，返回按 y 坐标聚成的行：[[{text, cx, cy, h}, ...], ...]。"""
     tmp_path = tmp_path or _OCR_TMP
@@ -123,7 +123,7 @@ def cjk_outside_comment(rows):
 def looks_like_code(rows):
     return any(m in text_of(rows) for m in _CODE_KW)
 
-
+# 最少 2 行 → 不像代码 → 有汉字 → 不是两行小公式 → 列数不超 8 → 多列的行占比超过 40%/50% → 才算表格。
 def is_table(rows):
     """判定是不是真表格。
 
